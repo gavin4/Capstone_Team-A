@@ -1,0 +1,23 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+toolkit.jar:
+% content mozapps %content/mozapps/
+  content/mozapps/extensions/default-theme-icon.svg             (content/default-theme-icon.svg)
+#ifndef MOZ_FENNEC
+* content/mozapps/extensions/extensions.xul                     (content/extensions.xul)
+  content/mozapps/extensions/extensions.css                     (content/extensions.css)
+  content/mozapps/extensions/extensions.js                      (content/extensions.js)
+* content/mozapps/extensions/extensions.xml                     (content/extensions.xml)
+  content/mozapps/extensions/updateinfo.xsl                     (content/updateinfo.xsl)
+  content/mozapps/extensions/blocklist.xul                      (content/blocklist.xul)
+  content/mozapps/extensions/blocklist.js                       (content/blocklist.js)
+  content/mozapps/extensions/blocklist.css                      (content/blocklist.css)
+  content/mozapps/extensions/blocklist.xml                      (content/blocklist.xml)
+  content/mozapps/extensions/eula.xul                           (content/eula.xul)
+  content/mozapps/extensions/eula.js                            (content/eula.js)
+  content/mozapps/extensions/pluginPrefs.xul                    (content/pluginPrefs.xul)
+  content/mozapps/extensions/pluginPrefs.js                     (content/pluginPrefs.js)
+  content/mozapps/extensions/OpenH264-license.txt               (content/OpenH264-license.txt)
+#endif
