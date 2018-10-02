@@ -1,5 +1,7 @@
 # Capstone_Team-A
-Project for capstone team A.
+Project for capstone team A. 
+
+For meeting notes and project progress, please reference [the wiki, located here.](https://github.com/gavin4/Capstone_Team-A/wiki)
 
 
 
