@@ -1,4 +1,4 @@
-#include "NativeFileWatcherNotSupported.h"
+#include "NativeFileWatcherLnx.h"
 
 
 #include "mozilla/Services.h"
