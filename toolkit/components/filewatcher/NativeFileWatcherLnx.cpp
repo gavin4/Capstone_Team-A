@@ -727,16 +727,7 @@ NativeFileWatcherIOTask::DeactivateRunnableMethod()
   mChangeCallbacksTable.Clear();
   mErrorCallbacksTable.Clear();
 
-  // Close the IO completion port, eventually making
-  // the watcher thread exit from the watching loop.
-  if (mIOCompletionPort) {
-    if (!CloseHandle(mIOCompletionPort)) {
-      FILEWATCHERLOG(
-        "NativeFileWatcherIOTask::DeactivateRunnableMethod - "
-        "Failed to close the IO completion port HANDLE.");
-    }
-  }
-
+  
   // Now we just need to reschedule a final call to Shutdown() back to the main thread.
   RefPtr<NativeWatcherIOShutdownTask> shutdownRunnable =
     new NativeWatcherIOShutdownTask();
@@ -864,7 +855,8 @@ NativeFileWatcherIOTask::ReportError(
  * @param aResource
  *        The resource name to dispatch thorough the success callback.
  *
- * @return NS_OK if the callback is dispatched correctly.
+ * @return NS_OK if the cal
+ lback is dispatched correctly.
  */
 nsresult
 NativeFileWatcherIOTask::ReportSuccess(
@@ -895,6 +887,8 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
   MOZ_ASSERT(!mShuttingDown);
 
   DWORD dwPlaceholder;
+  
+  //FIXME: Change to comlpy to inotify conventions
   // Tells the OS to watch out on mResourceHandle for the changes specified
   // with the FILE_NOTIFY_* flags. We monitor the creation, renaming and
   // deletion of a file (FILE_NOTIFY_CHANGE_FILE_NAME), changes to the last
@@ -912,6 +906,7 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
                              &dwPlaceholder,
                              &aDirectoryDescriptor->mOverlappedInfo,
                              nullptr)) {
+    
     // NOTE: GetLastError() could return ERROR_INVALID_PARAMETER if the buffer length
     // is greater than 64 KB and the application is monitoring a directory over the
     // network. The same error could be returned when trying to watch a file instead
@@ -919,6 +914,7 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
     // It could return ERROR_NOACCESS if the buffer is not aligned on a DWORD boundary.
     DWORD dwError = GetLastError();
 
+    //TOFIX: Log message needs to change from ReadDirectoryChangesW
     FILEWATCHERLOG(
       "NativeFileWatcherIOTask::AddDirectoryToWatchList "
       " - ReadDirectoryChangesW failed (error %x) for %S.",
