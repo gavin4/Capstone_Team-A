@@ -9,7 +9,7 @@
 
 namespace mozilla {
 
-	class GenericFileWatcherService final : public nsINativeFileWatcherService,
+    class NativeFileWatcherService final : public nsINativeFileWatcherService,
 		public nsIObserver
 	{
 	public:
@@ -17,7 +17,7 @@ namespace mozilla {
 		NS_DECL_NSINATIVEFILEWATCHERSERVICE
 		NS_DECL_NSIOBSERVER
 
-		GenericFileWatcherService();
+        NativeFileWatcherService();
 
 		nsresult Init();
 
@@ -28,13 +28,14 @@ namespace mozilla {
 		// The instance of the runnable dealing with the I/O.
 		nsCOMPtr<nsIRunnable> mWorkerIORunnable;
 
+
 		nsresult Uninit();
 		void WakeUpWorkerThread();
 
 		// Make the dtor private to make this object only deleted via its ::Release() method.
-		~GenericFileWatcherService();
-		GenericFileWatcherService(const GenericFileWatcherService& other) = delete;
-		void operator=(const GenericFileWatcherService& other) = delete;
+        ~NativeFileWatcherService();
+        NativeFileWatcherService(const NativeFileWatcherService& other) = delete;
+        void operator=(const NativeFileWatcherService& other) = delete;
 	};
 
 } // namespace mozilla

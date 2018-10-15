@@ -41,9 +41,11 @@
 
 #if defined(XP_WIN)
 #include "NativeFileWatcherWin.h"
+#elif defined (XP_UNIX)
+#include "NativeFileWatcherLnx.h"
 #else
 #include "NativeFileWatcherNotSupported.h"
-#endif // (XP_WIN)
+#endif
 
 #if !defined(MOZ_WIDGET_ANDROID)
 #define MOZ_HAS_TERMINATOR
