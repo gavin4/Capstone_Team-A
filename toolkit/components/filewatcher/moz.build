@@ -14,6 +14,11 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     UNIFIED_SOURCES += [
         'NativeFileWatcherWin.cpp',
     ]
+elif CONFIG['OS_TARGET'] == 'Linux':
+    EXPORTS += ['NativeFileWatcherLnx.h']
+    UNIFIED_SOURCES += [
+        'NativeFileWatcherLnx.cpp',
+    ]
 else:
     EXPORTS += ['NativeFileWatcherNotSupported.h']
 
