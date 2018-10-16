@@ -1,6 +1,5 @@
 ﻿#include "NativeFileWatcherLnx.h"
 
-
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
 #include "nsClassHashtable.h"
@@ -19,10 +18,9 @@
 #include <cstdlib>
 #include <queue>
 
-namespace mozilla{
+namespace mozilla {
 
 namespace {
-
 
 /**
  * An event used to notify the main thread when an error happens.
@@ -35,8 +33,10 @@ public:
    * @param aError The |nsresult| error value.
    * @param osError The error returned by GetLastError().
    */
-  WatchedErrorEvent(const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
-                    const nsresult& anError, const long& osError)
+  WatchedErrorEvent(
+    const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
+    const nsresult& anError,
+    const long& osError)
     : Runnable("WatchedErrorEvent")
     , mOnError(aOnError)
     , mError(anError)
@@ -57,12 +57,11 @@ public:
     return NS_OK;
   }
 
- private:
+private:
   nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> mOnError;
   nsresult mError;
   long mOsError;
 };
-
 
 /**
  * An event used to notify the main thread when an operation is successful.
@@ -75,7 +74,8 @@ public:
    * @param aResourcePath
    *        The path of the resource for which this event was generated.
    */
-  WatchedSuccessEvent(const nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>& aOnSuccess,
+  WatchedSuccessEvent(const nsMainThreadPtrHandle<
+                        nsINativeFileWatcherSuccessCallback>& aOnSuccess,
                       const nsAString& aResourcePath)
     : Runnable("WatchedSuccessEvent")
     , mOnSuccess(aOnSuccess)
@@ -97,7 +97,7 @@ public:
     return NS_OK;
   }
 
- private:
+private:
   nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> mOnSuccess;
   nsString mResourcePath;
 };
@@ -113,8 +113,9 @@ public:
    * @param aOnChange The passed change callback.
    * @param aChangedResource The name of the changed resource.
    */
-  WatchedChangeEvent(const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
-                     const nsAString& aChangedResource)
+  WatchedChangeEvent(
+    const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
+    const nsAString& aChangedResource)
     : Runnable("WatchedChangeEvent")
     , mOnChange(aOnChange)
     , mChangedResource(aChangedResource)
@@ -126,7 +127,8 @@ public:
   {
     MOZ_ASSERT(NS_IsMainThread());
 
-    // The second parameter is reserved for future uses: we use 0 as a placeholder.
+    // The second parameter is reserved for future uses: we use 0 as a
+    // placeholder.
     (void)mOnChange->Changed(mChangedResource, 0);
     return NS_OK;
   }
@@ -137,13 +139,17 @@ private:
 };
 
 // Define these callback array types to make the code easier to read.
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>> ChangeCallbackArray;
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>> ErrorCallbackArray;
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>>
+  ChangeCallbackArray;
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>>
+  ErrorCallbackArray;
 
 static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
-#define FILEWATCHERLOG(...) MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+#define FILEWATCHERLOG(...)                                                    \
+  MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
-struct WatchedResourceDescriptor {
+struct WatchedResourceDescriptor
+{
   // The path on the file system of the watched resource.
   nsString mPath;
 
@@ -157,41 +163,43 @@ struct WatchedResourceDescriptor {
   }
 };
 
-
 /**
  *  * A structure used to pass the callbacks to the AddPathRunnableMethod() and
  *   * RemovePathRunnableMethod().
  *    */
-struct PathRunnablesParametersWrapper {
-	nsString mPath;
-	nsMainThreadPtrHandle<nsINativeFileWatcherCallback> mChangeCallbackHandle;
-	nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> mErrorCallbackHandle;
-	nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> mSuccessCallbackHandle;
+struct PathRunnablesParametersWrapper
+{
+  nsString mPath;
+  nsMainThreadPtrHandle<nsINativeFileWatcherCallback> mChangeCallbackHandle;
+  nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> mErrorCallbackHandle;
+  nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>
+    mSuccessCallbackHandle;
 
-	PathRunnablesParametersWrapper(
-			const nsAString& aPath,
-			const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
-			const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
-			const nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>& aOnSuccess)
-		: mPath(aPath)
-		  , mChangeCallbackHandle(aOnChange)
-		  , mErrorCallbackHandle(aOnError)
-		  , mSuccessCallbackHandle(aOnSuccess)
-	{
-	}
+  PathRunnablesParametersWrapper(
+    const nsAString& aPath,
+    const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
+    const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
+    const nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>&
+      aOnSuccess)
+    : mPath(aPath)
+    , mChangeCallbackHandle(aOnChange)
+    , mErrorCallbackHandle(aOnError)
+    , mSuccessCallbackHandle(aOnSuccess)
+  {
+  }
 };
 
-
 /**
- * This runnable is dispatched from the main thread to get the notifications of the
- * changes in the watched resources by continuously calling the blocking function
- * GetQueuedCompletionStatus. This function queries the status of the Completion I/O
- * port initialized in the main thread. The watched resources are registered to the
- * completion I/O port when calling |addPath|.
+ * This runnable is dispatched from the main thread to get the notifications of
+ * the changes in the watched resources by continuously calling the blocking
+ * function GetQueuedCompletionStatus. This function queries the status of the
+ * Completion I/O port initialized in the main thread. The watched resources are
+ * registered to the completion I/O port when calling |addPath|.
  *
- * Instead of using a loop within the Run() method, the Runnable reschedules itself
- * by issuing a NS_DispatchToCurrentThread(this) before exiting. This is done to allow
- * the execution of other runnables enqueued within the thread task queue.
+ * Instead of using a loop within the Run() method, the Runnable reschedules
+ * itself by issuing a NS_DispatchToCurrentThread(this) before exiting. This is
+ * done to allow the execution of other runnables enqueued within the thread
+ * task queue.
  */
 class NativeFileWatcherIOTask : public Runnable
 {
@@ -203,20 +211,24 @@ public:
   }
 
   NS_IMETHOD Run() override;
-  nsresult AddPathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
-  nsresult RemovePathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
+  nsresult AddPathRunnableMethod(
+    PathRunnablesParametersWrapper* aWrappedParameters);
+  nsresult RemovePathRunnableMethod(
+    PathRunnablesParametersWrapper* aWrappedParameters);
   nsresult DeactivateRunnableMethod();
-
 
 private:
   // Maintain 2 indexes - one by resource path, one by resource |HANDLE|.
   // Since |HANDLE| is basically a typedef to void*, we use nsVoidPtrHashKey to
   // compute the hashing key. We need 2 indexes in order to quickly look up the
   // changed resource in the Worker Thread.
-  // The objects are not ref counted and get destroyed by mWatchedResourcesByPath
-  // on NativeFileWatcherService::Destroy or in NativeFileWatcherService::RemovePath.
-  nsClassHashtable<nsStringHashKey, WatchedResourceDescriptor> mWatchedResourcesByPath;
-  nsDataHashtable<nsVoidPtrHashKey, WatchedResourceDescriptor*> mWatchedResourcesByHandle;
+  // The objects are not ref counted and get destroyed by
+  // mWatchedResourcesByPath on NativeFileWatcherService::Destroy or in
+  // NativeFileWatcherService::RemovePath.
+  nsClassHashtable<nsStringHashKey, WatchedResourceDescriptor>
+    mWatchedResourcesByPath;
+  nsDataHashtable<nsVoidPtrHashKey, WatchedResourceDescriptor*>
+    mWatchedResourcesByHandle;
 
   // The same callback can be associated to multiple watches so we need to keep
   // them alive as long as there is a watch using them. We create two hashtables
@@ -239,25 +251,30 @@ private:
 
   nsresult RunInternal();
 
-  nsresult DispatchChangeCallbacks(WatchedResourceDescriptor* aResourceDescriptor,
-                                   const nsAString& aChangedResource);
+  nsresult DispatchChangeCallbacks(
+    WatchedResourceDescriptor* aResourceDescriptor,
+    const nsAString& aChangedResource);
 
   nsresult ReportChange(
     const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
     const nsAString& aChangedResource);
 
-  nsresult DispatchErrorCallbacks(WatchedResourceDescriptor* aResourceDescriptor,
-                                  nsresult anError, long anOSError);
+  nsresult DispatchErrorCallbacks(
+    WatchedResourceDescriptor* aResourceDescriptor,
+    nsresult anError,
+    long anOSError);
 
   nsresult ReportError(
     const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
-    nsresult anError, long anOSError);
+    nsresult anError,
+    long anOSError);
 
-  nsresult ReportSuccess(
-    const nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>& aOnSuccess,
-    const nsAString& aResourcePath);
+  nsresult ReportSuccess(const nsMainThreadPtrHandle<
+                           nsINativeFileWatcherSuccessCallback>& aOnSuccess,
+                         const nsAString& aResourcePath);
 
-  nsresult AddDirectoryToWatchList(WatchedResourceDescriptor* aDirectoryDescriptor);
+  nsresult AddDirectoryToWatchList(
+    WatchedResourceDescriptor* aDirectoryDescriptor);
 
   void AppendCallbacksToHashtables(
     const nsAString& aPath,
@@ -269,16 +286,15 @@ private:
     const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChange,
     const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError);
 
-  nsresult MakeResourcePath(
-    WatchedResourceDescriptor* changedDescriptor,
-    const nsAString& resourceName,
-    nsAString& nativeResourcePath);
+  nsresult MakeResourcePath(WatchedResourceDescriptor* changedDescriptor,
+                            const nsAString& resourceName,
+                            nsAString& nativeResourcePath);
 };
 
 void
 NativeFileWatcherIOTask::signalHandler(int signal)
 {
-    ++mEventWaiting;
+  ++mEventWaiting;
 }
 
 /**
@@ -290,158 +306,110 @@ NativeFileWatcherIOTask::signalHandler(int signal)
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-  //FIXME: This will hold the number of bytes from a read on the inotify file descirptor 
+  // FIXME: This will hold the number of bytes from a read on the inotify file
+  // descirptor
   // The number of bytes transferred by GetQueuedCompletionStatus
   // (used to check for |int| closing).
   ssize_t transferredBytes = 0;
 
   mInotifyFileDescriptor = inotify_init();
-  if(mInotifyFileDescriptor == -1)
-  {
-      FILEWATCHERLOG(
-        "NativeFileWatcherIOTask::Run - inotify fail initialize");
-      return NS_ERROR_ABORT;
+  if (mInotifyFileDescriptor == -1) {
+    FILEWATCHERLOG("NativeFileWatcherIOTask::Run - inotify fail initialize");
+    return NS_ERROR_ABORT;
   }
 
   /**********************************/
   /* Set up signal handler.  */
   // Set up the struct that will configure our handler.
-  struct sigaction sa;      // Describes the action to take on a process's signals.
-  sigemptyset(&sa.sa_mask); // Init the signal mask field for those we want to ignore.
-  sa.sa_flags = SA_RESTART; // Restart? FIXME: why this is, can I/should I change?
-  sa.sa_handler = this->signalHandler; // Set the method we want to use as a handler for the signal.
+  struct sigaction sa; // Describes the action to take on a process's signals.
+  sigemptyset(
+    &sa.sa_mask); // Init the signal mask field for those we want to ignore.
+  sa.sa_flags =
+    SA_RESTART; // Restart? FIXME: why this is, can I/should I change?
+  sa.sa_handler = this->signalHandler; // Set the method we want to use as a
+                                       // handler for the signal.
 
   // Register the handler. Check for error.
   if (sigaction(SIGIO, &sa, NULL) == -1) {
-      FILEWATCHERLOG("Failed to register handler!");
+    FILEWATCHERLOG("Failed to register handler!");
+    return NS_ERROR_ABORT;
   }
 
   // Allow process to receive I/O signals from the file descriptor.
   if (fcntl(mInotifyFileDescriptor, F_SETOWN, getpid()) == -1) {
-      FILEWATCHERLOG("Failed to set F_SETOWN!");
+    FILEWATCHERLOG("Failed to set F_SETOWN!");
+    return NS_ERROR_ABORT;
   }
 
   int flags = fcntl(mInotifyFileDescriptor, F_GETFL);
-  if(fcntl(mInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) == -1) {
-      FILEWATCHERLOG("Another error bleh.\n");
+  if (fcntl(mInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) ==
+      -1) {
+    FILEWATCHERLOG("failed to set the file descriptor to async and nonblock.\n");
+    return NS_ERROR_ABORT;
   }
 
-/************************************/
+  /************************************/
 
-  //FIXME: Conversion to inotify
-  // Check for changes in the resource status by querying the |mIOCompletionPort|
-  // (blocking). GetQueuedCompletionStatus is always called before the first call
-  // to ReadDirectoryChangesW. This isn't a problem, since mIOCompletionPort is
-  // already a valid |int| even though it doesn't have any associated notification
-  // handles (through ReadDirectoryChangesW).
-  /*if (!GetQueuedCompletionStatus(mIOCompletionPort, &transferredBytes,
-                                 &changedResourceHandle, &overlappedStructure,
-                                 INFINITE)) {
-    // Ok, there was some error.
-    long errCode = GetLastError();
-    switch (errCode) {
-      case ERROR_NOTIFY_ENUM_DIR: {
-        // There were too many changes and the notification buffer has overflowed.
-        // We dispatch the special value "*" and reschedule.
-        FILEWATCHERLOG("NativeFileWatcherIOTask::Run - Notification buffer has overflowed");
-
-        WatchedResourceDescriptor* changedRes =
-          mWatchedResourcesByHandle.Get((int)changedResourceHandle);
-
-        nsresult rv = DispatchChangeCallbacks(changedRes, NS_LITERAL_STRING("*"));
-        if (NS_FAILED(rv)) {
-          // We failed to dispatch the error callbacks. Something very
-          // bad happened to the main thread, so we bail out from the watcher thread.
-          FILEWATCHERLOG(
-            "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks (%x).",
-            rv);
-          return rv;
-        }
-
-        return NS_OK;
-      }
-      case ERROR_ABANDONED_WAIT_0:
-      case ERROR_INVALID_int: {
-        // If we reach this point, mIOCompletionPort was probably closed
-        // and we need to close this thread. This condition is identified
-        // by catching the  ERROR_INVALID_int error.
-        FILEWATCHERLOG(
-          "NativeFileWatcherIOTask::Run - The completion port was closed (%x).",
-          errCode);
-        return NS_ERROR_ABORT;
-      }
-      case ERROR_OPERATION_ABORTED: {
-        // Some path was unwatched! That's not really an error, now it is safe
-        // to free the memory for the resource and call GetQueuedCompletionStatus
-        // again.
-        FILEWATCHERLOG("NativeFileWatcherIOTask::Run - Path unwatched (%x).", errCode);
-
-        WatchedResourceDescriptor* toFree =
-          mWatchedResourcesByHandle.Get((int)changedResourceHandle);
-
-        if (toFree) {
-          // Take care of removing the resource and freeing the memory
-
-          mWatchedResourcesByHandle.Remove((int)changedResourceHandle);
-
-          // This last call eventually frees the memory
-          mWatchedResourcesByPath.Remove(toFree->mPath);
-        }
-
-        return NS_OK;
-      }
-      default: {
-        // It should probably never get here, but it's better to be safe.
-        FILEWATCHERLOG("NativeFileWatcherIOTask::Run - Unknown error (%x).", errCode);
-
-        return NS_ERROR_FAILURE;
-      }
-    }
-  }*/
+  // FIXME: Conversion to inotify
 
   // Check to see which resource is changedResourceHandle.
-  //WatchedResourceDescriptor* changedRes =
-  //  mWatchedResourcesByHandle.Get((int)changedResourceHandle);
-  //MOZ_ASSERT(changedRes, "Could not find the changed resource in the list of watched ones.");
+   //WatchedResourceDescriptor* changedRes =
+   // mWatchedResourcesByHandle.Get((int)changedResourceHandle);
+  // MOZ_ASSERT(changedRes, "Could not find the changed resource in the list of
+  // watched ones.");
 
   // Parse the changes and notify the main thread.
-  //const unsigned char* rawNotificationBuffer = changedRes->mNotificationBuffer.get();
+  // const unsigned char* rawNotificationBuffer =
+  // changedRes->mNotificationBuffer.get();
 
-  
-  //FIXME: This is where we'll call sleep() and wait for our event handler to return
-  while (true) {/*
-    int* notificationInfo =
-      (int*)rawNotificationBuffer;
+  // FIXME: This is where we'll call sleep() and wait for our event handler to
+  // return
+  char inotifyEventBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
+  while (
+    true) {
+      sleep(1);
+      if(mEventWaiting){
+          --mEventWaiting;
+          //FIXME: add timeout to this while loop
+          while(read(mInotifyFileDescriptor,inotifyEventBuffer,sizeof(inotifyEventBuffer))){
+             // mInotifyEventQueue.push((inotify_event)inotifyEventBuffer);
 
-    // FileNameLength is in bytes, but we need FileName length
-    // in characters, so divide it by sizeof(WCHAR).
-    //nsAutoString resourceName(notificationInfo->FileName,
-    //                          notificationInfo->FileNameLength / sizeof(WCHAR));
-
-    // Handle path normalisation using nsIFile.
-    nsString resourcePath;
-    //nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
-    if (NS_SUCCEEDED(rv)) {
-      //rv = DispatchChangeCallbacks(changedRes, resourcePath);
-      if (NS_FAILED(rv)) {
-        // Log that we failed to dispatch the change callbacks.
-        FILEWATCHERLOG(
-          "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks (%x).",
-          rv);
-        return rv;
+          }
       }
-    }
+      /*
+int* notificationInfo =
+  (int*)rawNotificationBuffer;
 
-    if (false notificationInfo->NextEntryOffset) {
-      break;
-    }*/
+// FileNameLength is in bytes, but we need FileName length
+// in characters, so divide it by sizeof(WCHAR).
+//nsAutoString resourceName(notificationInfo->FileName,
+//                          notificationInfo->FileNameLength / sizeof(WCHAR));
 
-    //rawNotificationBuffer += notificationInfo->NextEntryOffset;
+// Handle path normalisation using nsIFile.
+nsString resourcePath;
+//nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
+if (NS_SUCCEEDED(rv)) {
+  //rv = DispatchChangeCallbacks(changedRes, resourcePath);
+  if (NS_FAILED(rv)) {
+    // Log that we failed to dispatch the change callbacks.
+    FILEWATCHERLOG(
+      "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks
+(%x).", rv); return rv;
+  }
+}
+
+if (false notificationInfo->NextEntryOffset) {
+  break;
+}*/
+
+    // rawNotificationBuffer += notificationInfo->NextEntryOffset;
   }
 
+
   // We need to keep watching for further changes.
-  //nsresult rv = AddDirectoryToWatchList(changedRes);
-  /*if (NS_FAILED(rv)) {
+  /*
+  nsresult rv = AddDirectoryToWatchList(changedRes);
+  if (NS_FAILED(rv)) {
     // We failed to watch the folder.
     if (rv == NS_ERROR_ABORT) {
       // Log that we also failed to dispatch the error callbacks.
@@ -450,8 +418,8 @@ NativeFileWatcherIOTask::RunInternal()
         " to dispatch the related error callbacks", changedRes->mPath.get());
       return rv;
     }
-  }*/
-
+  }
+   */
   return NS_OK;
 }
 
@@ -477,7 +445,8 @@ NativeFileWatcherIOTask::Run()
   if (NS_FAILED(rv)) {
     // A critical error occurred in the watcher loop, don't reschedule.
     FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::Run - Stopping the watcher loop (error %S)", rv);
+      "NativeFileWatcherIOTask::Run - Stopping the watcher loop (error %S)",
+      rv);
 
     // We log the error but return NS_OK instead: we don't want to
     // propagate an exception through XPCOM.
@@ -489,9 +458,9 @@ NativeFileWatcherIOTask::Run()
 }
 
 /**
- * Adds the resource to the watched list. This function is enqueued on the worker
- * thread by NativeFileWatcherService::AddPath. All the errors are reported to the main
- * thread using the error callback function mErrorCallback.
+ * Adds the resource to the watched list. This function is enqueued on the
+ * worker thread by NativeFileWatcherService::AddPath. All the errors are
+ * reported to the main thread using the error callback function mErrorCallback.
  *
  * @param pathToWatch
  *        The path of the resource to watch for changes.
@@ -507,7 +476,8 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 {
   MOZ_ASSERT(!NS_IsMainThread());
 
-  nsAutoPtr<PathRunnablesParametersWrapper> wrappedParameters(aWrappedParameters);
+  nsAutoPtr<PathRunnablesParametersWrapper> wrappedParameters(
+    aWrappedParameters);
 
   // We return immediately if |mShuttingDown| is true (see below for
   // details about the shutdown protocol being followed).
@@ -515,9 +485,9 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
     return NS_OK;
   }
 
-  if (!wrappedParameters ||
-      !wrappedParameters->mChangeCallbackHandle) {
-    FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - Invalid arguments.");
+  if (!wrappedParameters || !wrappedParameters->mChangeCallbackHandle) {
+    FILEWATCHERLOG(
+      "NativeFileWatcherIOTask::AddPathRunnableMethod - Invalid arguments.");
     return NS_ERROR_NULL_POINTER;
   }
 
@@ -525,57 +495,54 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
   WatchedResourceDescriptor* watchedResource =
     mWatchedResourcesByPath.Get(wrappedParameters->mPath);
   if (watchedResource) {
-    // If it exists, append it to the hash tables. If not, go to the next function.
-    AppendCallbacksToHashtables(
-      watchedResource->mPath,
-      wrappedParameters->mChangeCallbackHandle,
-      wrappedParameters->mErrorCallbackHandle);
+    // If it exists, append it to the hash tables. If not, go to the next
+    // function.
+    AppendCallbacksToHashtables(watchedResource->mPath,
+                                wrappedParameters->mChangeCallbackHandle,
+                                wrappedParameters->mErrorCallbackHandle);
 
     return NS_OK;
   }
 
-  
-  //FIXME: This is where we'll call intofiy_add_watch()
+  // FIXME: This is where we'll call intofiy_add_watch()
   // Retrieve a file handle to associate with the completion port. Makes
   // sure to request the appropriate rights (i.e. read files and list
   // files contained in a folder). Note: the nullptr security flag prevents
   // the |int| to be passed to child processes.
 
-  int resHandle = inotify_add_watch(mInotifyFileDescriptor, (char*)wrappedParameters->mPath.get(), IN_ALL_EVENTS);
-    if(resHandle == -1)
-    {
-        FILEWATCHERLOG(
-          "NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
-        return NS_ERROR_ABORT;
-    }
-   // Initialise the resource descriptor.
+  int resHandle = inotify_add_watch(mInotifyFileDescriptor,
+                                    (char*)wrappedParameters->mPath.get(),
+                                    IN_ALL_EVENTS);
+  if (resHandle == -1) {
+    FILEWATCHERLOG(
+      "NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
+    return NS_ERROR_ABORT;
+  }
+  // Initialise the resource descriptor.
   UniquePtr<WatchedResourceDescriptor> resourceDesc(
     new WatchedResourceDescriptor(wrappedParameters->mPath, resHandle));
 
   // Append the callbacks to the hash tables. We do this now since
   // AddDirectoryToWatchList could use the error callback, but we
   // need to make sure to remove them if AddDirectoryToWatchList fails.
-  AppendCallbacksToHashtables(
-    wrappedParameters->mPath,
-    wrappedParameters->mChangeCallbackHandle,
-    wrappedParameters->mErrorCallbackHandle);
-
+  AppendCallbacksToHashtables(wrappedParameters->mPath,
+                              wrappedParameters->mChangeCallbackHandle,
+                              wrappedParameters->mErrorCallbackHandle);
 
   nsresult rv = AddDirectoryToWatchList(resourceDesc.get());
   if (NS_SUCCEEDED(rv)) {
     // Add the resource pointer to both indexes.
     WatchedResourceDescriptor* resource = resourceDesc.release();
     mWatchedResourcesByPath.Put(wrappedParameters->mPath, resource);
-    mWatchedResourcesByHandle.Put(resHandle, resource);
+    mWatchedResourcesByHandle.Put((void*)resHandle, resource); // FIXME: This (the cast to void*) probably won't work, should review.
 
     // Dispatch the success callback.
-    nsresult rv =
-      ReportSuccess(wrappedParameters->mSuccessCallbackHandle, wrappedParameters->mPath);
+    nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
+                                wrappedParameters->mPath);
     if (NS_FAILED(rv)) {
-      FILEWATCHERLOG(
-        "NativeFileWatcherIOTask::AddPathRunnableMethod - "
-        "Failed to dispatch the success callback (%x).",
-        rv);
+      FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - "
+                     "Failed to dispatch the success callback (%x).",
+                     rv);
       return rv;
     }
 
@@ -584,10 +551,9 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
   // We failed to watch the folder. Remove the callbacks
   // from the hash tables.
-  RemoveCallbacksFromHashtables(
-    wrappedParameters->mPath,
-    wrappedParameters->mChangeCallbackHandle,
-    wrappedParameters->mErrorCallbackHandle);
+  RemoveCallbacksFromHashtables(wrappedParameters->mPath,
+                                wrappedParameters->mChangeCallbackHandle,
+                                wrappedParameters->mErrorCallbackHandle);
 
   if (rv != NS_ERROR_ABORT) {
     // Just don't add the descriptor to the watch list.
@@ -597,14 +563,15 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
   // We failed to dispatch the error callbacks as well.
   FILEWATCHERLOG(
     "NativeFileWatcherIOTask::AddPathRunnableMethod - Failed to watch %s and"
-    " to dispatch the related error callbacks", resourceDesc->mPath.get());
+    " to dispatch the related error callbacks",
+    resourceDesc->mPath.get());
 
   return rv;
 }
 
 /**
- * Removes the path from the list of watched resources. Silently ignores the request
- * if the path was not being watched.
+ * Removes the path from the list of watched resources. Silently ignores the
+ * request if the path was not being watched.
  *
  * Remove Protocol:
  *
@@ -618,8 +585,8 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
  *    memory will be freed in NativeFileWatcherIOTask::Run.
  *
  * @param aWrappedParameters
- *        The structure containing the resource path, the error and change callback
- *        handles.
+ *        The structure containing the resource path, the error and change
+ * callback handles.
  */
 nsresult
 NativeFileWatcherIOTask::RemovePathRunnableMethod(
@@ -627,7 +594,8 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
 {
   MOZ_ASSERT(!NS_IsMainThread());
 
-  nsAutoPtr<PathRunnablesParametersWrapper> wrappedParameters(aWrappedParameters);
+  nsAutoPtr<PathRunnablesParametersWrapper> wrappedParameters(
+    aWrappedParameters);
 
   // We return immediately if |mShuttingDown| is true (see below for
   // details about the shutdown protocol being followed).
@@ -635,42 +603,40 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
     return NS_OK;
   }
 
-  if (!wrappedParameters ||
-      !wrappedParameters->mChangeCallbackHandle) {
+  if (!wrappedParameters || !wrappedParameters->mChangeCallbackHandle) {
     return NS_ERROR_NULL_POINTER;
   }
 
   WatchedResourceDescriptor* toRemove =
     mWatchedResourcesByPath.Get(wrappedParameters->mPath);
   if (!toRemove) {
-    // We are trying to remove a path which wasn't being watched. Silently ignore
-    // and dispatch the success callback.
-    nsresult rv =
-      ReportSuccess(wrappedParameters->mSuccessCallbackHandle, wrappedParameters->mPath);
+    // We are trying to remove a path which wasn't being watched. Silently
+    // ignore and dispatch the success callback.
+    nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
+                                wrappedParameters->mPath);
     if (NS_FAILED(rv)) {
-      FILEWATCHERLOG(
-        "NativeFileWatcherIOTask::RemovePathRunnableMethod - "
-        "Failed to dispatch the success callback (%x).",
-        rv);
+      FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - "
+                     "Failed to dispatch the success callback (%x).",
+                     rv);
       return rv;
     }
     return NS_OK;
   }
 
-  //Hash table points to an array of callbacks.
+  // Hash table points to an array of callbacks.
   ChangeCallbackArray* changeCallbackArray =
     mChangeCallbacksTable.Get(toRemove->mPath);
 
   // This should always be valid.
   MOZ_ASSERT(changeCallbackArray);
 
-  bool removed =
-    changeCallbackArray->RemoveElement(wrappedParameters->mChangeCallbackHandle);
+  bool removed = changeCallbackArray->RemoveElement(
+    wrappedParameters->mChangeCallbackHandle);
   if (!removed) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable to remove the change "
-      "callback from the change callback hash map for %S.",
-      wrappedParameters->mPath.get());
+    FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
+                   "to remove the change "
+                   "callback from the change callback hash map for %S.",
+                   wrappedParameters->mPath.get());
     MOZ_CRASH();
   }
 
@@ -682,53 +648,44 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
   removed =
     errorCallbackArray->RemoveElement(wrappedParameters->mErrorCallbackHandle);
   if (!removed) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable to remove the error "
-      "callback from the error callback hash map for %S.",
-      wrappedParameters->mPath.get());
+    FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
+                   "to remove the error "
+                   "callback from the error callback hash map for %S.",
+                   wrappedParameters->mPath.get());
     MOZ_CRASH();
   }
-  //FIXME: Determine if we need to keep this.
   // If there are still callbacks left, keep the descriptor.
   // We don't check for error callbacks since there's no point in keeping
   // the descriptor if there are no change callbacks but some error callbacks.
   if (changeCallbackArray->Length()) {
     // Dispatch the success callback.
-    nsresult rv =
-      ReportSuccess(wrappedParameters->mSuccessCallbackHandle, wrappedParameters->mPath);
+    nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
+                                wrappedParameters->mPath);
     if (NS_FAILED(rv)) {
-      FILEWATCHERLOG(
-        "NativeFileWatcherIOTask::RemovePathRunnableMethod - "
-        "Failed to dispatch the success callback (%x).",
-        rv);
+      FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - "
+                     "Failed to dispatch the success callback (%x).",
+                     rv);
       return rv;
     }
     return NS_OK;
   }
 
-  // In this runnable, we just cancel callbacks (see above) and I/O (see below).
-  // Resources are freed by the worker thread when GetQueuedCompletionStatus
-  // detects that a resource was removed from the watch list.
-  // Since when closing |int|s relative to watched resources
-  // GetQueuedCompletionStatus is notified one last time, it would end
-  // up referring to deallocated memory if we were to free the memory here.
-  // This happens because the worker IO is scheduled to watch the resources
-  // again once we complete executing this function.
-
-  // Enforce CloseHandle/CancelIO by disposing the AutoCloseHandle. We don't
-  // remove the entry from mWatchedResourceBy* since the completion port might
-  // still be using the notification buffer. Entry remove is performed when
-  // handling ERROR_OPERATION_ABORTED in NativeFileWatcherIOTask::Run.
-//  toRemove->mWatchedResourceDescriptor.dispose();
+  // Removing a watched descriptor from the inotify instance and acting if the removal was a failure
+  int inotifyRemoveStatus = inotify_rm_watch(mInotifyFileDescriptor, toRemove->mWatchedResourceDescriptor);
+  if(inotifyRemoveStatus == -1){
+      FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
+                     "to remove the Watch Descriptor from the inotify instance %S.",
+                     wrappedParameters->mPath.get());
+      return NS_ERROR_ABORT;
+  }
 
   // Dispatch the success callback.
-  nsresult rv =
-    ReportSuccess(wrappedParameters->mSuccessCallbackHandle, wrappedParameters->mPath);
+  nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
+                              wrappedParameters->mPath);
   if (NS_FAILED(rv)) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::RemovePathRunnableMethod - "
-      "Failed to dispatch the success callback (%x).",
-      rv);
+    FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - "
+                   "Failed to dispatch the success callback (%x).",
+                   rv);
     return rv;
   }
 
@@ -749,22 +706,25 @@ NativeFileWatcherIOTask::DeactivateRunnableMethod()
              "Clients of the nsINativeFileWatcher must remove "
              "watches manually before quitting.");
 
+  close(mInotifyFileDescriptor);
+
   // Log any pending watch.
   for (auto it = mWatchedResourcesByHandle.Iter(); !it.Done(); it.Next()) {
     FILEWATCHERLOG("NativeFileWatcherIOTask::DeactivateRunnableMethod - "
-                   "%S is still being watched.", it.UserData()->mPath.get());
-
+                   "%S is still being watched.",
+                   it.UserData()->mPath.get());
   }
 
   // We return immediately if |mShuttingDown| is true (see below for
   // details about the shutdown protocol being followed).
   if (mShuttingDown) {
     // If this happens, we are in a strange situation.
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::DeactivateRunnableMethod - We are already shutting down.");
+    FILEWATCHERLOG("NativeFileWatcherIOTask::DeactivateRunnableMethod - We are "
+                   "already shutting down.");
     MOZ_CRASH();
     return NS_OK;
   }
+
 
   // Deactivate all the non-shutdown methods of this object.
   mShuttingDown = true;
@@ -781,22 +741,24 @@ NativeFileWatcherIOTask::DeactivateRunnableMethod()
   mChangeCallbacksTable.Clear();
   mErrorCallbacksTable.Clear();
 
-  
-  // Now we just need to reschedule a final call to Shutdown() back to the main thread.
-  //RefPtr<NativeWatcherIOShutdownTask> shutdownRunnable = //FIXME: Tegan, removed to build.
+  // Now we just need to reschedule a final call to Shutdown() back to the main
+  // thread.
+  // RefPtr<NativeWatcherIOShutdownTask> shutdownRunnable = //FIXME: Tegan,
+  // removed to build.
   //  new NativeWatcherIOShutdownTask();
 
-  return NS_OK;//NS_DispatchToMainThread(shutdownRunnable);
+  return NS_OK; // NS_DispatchToMainThread(shutdownRunnable);
 }
 
 /**
- * Helper function to dispatch a change notification to all the registered callbacks.
+ * Helper function to dispatch a change notification to all the registered
+ * callbacks.
  * @param aResourceDescriptor
  *        The resource descriptor.
  * @param aChangedResource
  *        The path of the changed resource.
- * @return NS_OK if all the callbacks are dispatched correctly, a |nsresult| error code
- *         otherwise.
+ * @return NS_OK if all the callbacks are dispatched correctly, a |nsresult|
+ * error code otherwise.
  */
 nsresult
 NativeFileWatcherIOTask::DispatchChangeCallbacks(
@@ -813,8 +775,7 @@ NativeFileWatcherIOTask::DispatchChangeCallbacks(
   MOZ_ASSERT(changeCallbackArray);
 
   for (size_t i = 0; i < changeCallbackArray->Length(); i++) {
-    nsresult rv =
-      ReportChange((*changeCallbackArray)[i], aChangedResource);
+    nsresult rv = ReportChange((*changeCallbackArray)[i], aChangedResource);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -844,20 +805,22 @@ NativeFileWatcherIOTask::ReportChange(
 }
 
 /**
- * Helper function to dispatch a error notification to all the registered callbacks.
+ * Helper function to dispatch a error notification to all the registered
+ * callbacks.
  * @param aResourceDescriptor
  *        The resource descriptor.
  * @param anError
  *        The error to dispatch thorough the error callback.
  * @param anOSError
  *        An OS specific error code to send with the callback.
- * @return NS_OK if all the callbacks are dispatched correctly, a |nsresult| error code
- *         otherwise.
+ * @return NS_OK if all the callbacks are dispatched correctly, a |nsresult|
+ * error code otherwise.
  */
 nsresult
 NativeFileWatcherIOTask::DispatchErrorCallbacks(
   WatchedResourceDescriptor* aResourceDescriptor,
-  nsresult anError, long anOSError)
+  nsresult anError,
+  long anOSError)
 {
   MOZ_ASSERT(aResourceDescriptor);
 
@@ -869,8 +832,7 @@ NativeFileWatcherIOTask::DispatchErrorCallbacks(
   MOZ_ASSERT(errorCallbackArray);
 
   for (size_t i = 0; i < errorCallbackArray->Length(); i++) {
-    nsresult rv =
-      ReportError((*errorCallbackArray)[i], anError, anOSError);
+    nsresult rv = ReportError((*errorCallbackArray)[i], anError, anOSError);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -894,7 +856,8 @@ NativeFileWatcherIOTask::DispatchErrorCallbacks(
 nsresult
 NativeFileWatcherIOTask::ReportError(
   const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnError,
-  nsresult anError, long anOSError)
+  nsresult anError,
+  long anOSError)
 {
   RefPtr<WatchedErrorEvent> errorRunnable =
     new WatchedErrorEvent(aOnError, anError, anOSError);
@@ -922,17 +885,18 @@ NativeFileWatcherIOTask::ReportSuccess(
   return NS_DispatchToMainThread(successRunnable);
 }
 
-
 /**
  * Instructs the OS to report the changes concerning the directory of interest.
  *
  * @param aDirectoryDescriptor
- *        A |WatchedResourceDescriptor| instance describing the directory to watch.
+ *        A |WatchedResourceDescriptor| instance describing the directory to
+ * watch.
  * @param aDispatchErrorCode
- *        If |ReadDirectoryChangesW| fails and dispatching an error callback to the
- *        main thread fails as well, the error code is stored here. If the OS API call
- *        does not fail, it gets set to NS_OK.
- * @return |true| if |ReadDirectoryChangesW| returned no error, |false| otherwise.
+ *        If |ReadDirectoryChangesW| fails and dispatching an error callback to
+ * the main thread fails as well, the error code is stored here. If the OS API
+ * call does not fail, it gets set to NS_OK.
+ * @return |true| if |ReadDirectoryChangesW| returned no error, |false|
+ * otherwise.
  */
 nsresult
 NativeFileWatcherIOTask::AddDirectoryToWatchList(
@@ -941,11 +905,11 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
   MOZ_ASSERT(!mShuttingDown);
 
   long dwPlaceholder;
-  
-  //FIXME: Change to comlpy to inotify conventions
-  // Tells the OS to watch out on mWatchedResourceDescriptor for the changes specified
-  // with the FILE_NOTIFY_* flags. We monitor the creation, renaming and
-  // deletion of a file (FILE_NOTIFY_CHANGE_FILE_NAME), changes to the last
+
+  // FIXME: Change to comlpy to inotify conventions
+  // Tells the OS to watch out on mWatchedResourceDescriptor for the changes
+  // specified with the FILE_NOTIFY_* flags. We monitor the creation, renaming
+  // and deletion of a file (FILE_NOTIFY_CHANGE_FILE_NAME), changes to the last
   // modification time (FILE_NOTIFY_CHANGE_LAST_WRITE) and the creation and
   // deletion of a folder (FILE_NOTIFY_CHANGE_DIR_NAME). Moreover, when you
   // first call this function, the system allocates a buffer to store change
@@ -960,19 +924,19 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
                              &dwPlaceholder,
                              &aDirectoryDescriptor->mOverlappedInfo,
                              nullptr)*/) {
-    
-    // NOTE: GetLastError() could return ERROR_INVALID_PARAMETER if the buffer length
-    // is greater than 64 KB and the application is monitoring a directory over the
-    // network. The same error could be returned when trying to watch a file instead
-    // of a directory.
-    // It could return ERROR_NOACCESS if the buffer is not aligned on a long boundary.
-    long dwError = 0;//GetLastError(); // FIXME: Tegan, removed to compile.
 
-    //TOFIX: Log message needs to change from ReadDirectoryChangesW
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::AddDirectoryToWatchList "
-      " - ReadDirectoryChangesW failed (error %x) for %S.",
-      dwError, aDirectoryDescriptor->mPath.get());
+    // NOTE: GetLastError() could return ERROR_INVALID_PARAMETER if the buffer
+    // length is greater than 64 KB and the application is monitoring a
+    // directory over the network. The same error could be returned when trying
+    // to watch a file instead of a directory. It could return ERROR_NOACCESS if
+    // the buffer is not aligned on a long boundary.
+    long dwError = 0; // GetLastError(); // FIXME: Tegan, removed to compile.
+
+    // TOFIX: Log message needs to change from ReadDirectoryChangesW
+    FILEWATCHERLOG("NativeFileWatcherIOTask::AddDirectoryToWatchList "
+                   " - ReadDirectoryChangesW failed (error %x) for %S.",
+                   dwError,
+                   aDirectoryDescriptor->mPath.get());
 
     nsresult rv =
       DispatchErrorCallbacks(aDirectoryDescriptor, NS_ERROR_FAILURE, dwError);
@@ -982,7 +946,8 @@ NativeFileWatcherIOTask::AddDirectoryToWatchList(
       return NS_ERROR_ABORT;
     }
 
-    // We failed to watch the directory, but we correctly dispatched the error callbacks.
+    // We failed to watch the directory, but we correctly dispatched the error
+    // callbacks.
     return NS_ERROR_FAILURE;
   }
 
@@ -1003,7 +968,8 @@ void
 NativeFileWatcherIOTask::AppendCallbacksToHashtables(
   const nsAString& aPath,
   const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChangeHandle,
-  const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnErrorHandle)
+  const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>&
+    aOnErrorHandle)
 {
   // First check to see if we've got an entry already.
   ChangeCallbackArray* callbacksArray = mChangeCallbacksTable.Get(aPath);
@@ -1052,7 +1018,8 @@ void
 NativeFileWatcherIOTask::RemoveCallbacksFromHashtables(
   const nsAString& aPath,
   const nsMainThreadPtrHandle<nsINativeFileWatcherCallback>& aOnChangeHandle,
-  const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>& aOnErrorHandle)
+  const nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>&
+    aOnErrorHandle)
 {
   // Find the change callback array for |aPath|.
   ChangeCallbackArray* callbacksArray = mChangeCallbacksTable.Get(aPath);
@@ -1087,35 +1054,36 @@ NativeFileWatcherIOTask::MakeResourcePath(
   const nsAString& resourceName,
   nsAString& nativeResourcePath)
 {
-  nsCOMPtr<nsIFile>
-    localPath(do_CreateInstance("@mozilla.org/file/local;1"));
+  nsCOMPtr<nsIFile> localPath(do_CreateInstance("@mozilla.org/file/local;1"));
   if (!localPath) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::MakeResourcePath - Failed to create a nsIFile instance.");
+    FILEWATCHERLOG("NativeFileWatcherIOTask::MakeResourcePath - Failed to "
+                   "create a nsIFile instance.");
     return NS_ERROR_FAILURE;
   }
 
   nsresult rv = localPath->InitWithPath(changedDescriptor->mPath);
   if (NS_FAILED(rv)) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::MakeResourcePath - Failed to init nsIFile with %S (%x).",
-      changedDescriptor->mPath.get(), rv);
+    FILEWATCHERLOG("NativeFileWatcherIOTask::MakeResourcePath - Failed to init "
+                   "nsIFile with %S (%x).",
+                   changedDescriptor->mPath.get(),
+                   rv);
     return rv;
   }
 
   rv = localPath->AppendRelativePath(resourceName);
   if (NS_FAILED(rv)) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::MakeResourcePath - Failed to append to %S (%x).",
-      changedDescriptor->mPath.get(), rv);
+    FILEWATCHERLOG("NativeFileWatcherIOTask::MakeResourcePath - Failed to "
+                   "append to %S (%x).",
+                   changedDescriptor->mPath.get(),
+                   rv);
     return rv;
   }
 
   rv = localPath->GetPath(nativeResourcePath);
   if (NS_FAILED(rv)) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::MakeResourcePath - Failed to get native path from nsIFile (%x).",
-      rv);
+    FILEWATCHERLOG("NativeFileWatcherIOTask::MakeResourcePath - Failed to get "
+                   "native path from nsIFile (%x).",
+                   rv);
     return rv;
   }
 
@@ -1126,15 +1094,13 @@ NativeFileWatcherIOTask::MakeResourcePath(
 
 // The NativeFileWatcherService component
 
-NS_IMPL_ISUPPORTS(NativeFileWatcherService, nsINativeFileWatcherService, nsIObserver);
+NS_IMPL_ISUPPORTS(NativeFileWatcherService,
+                  nsINativeFileWatcherService,
+                  nsIObserver);
 
-NativeFileWatcherService::NativeFileWatcherService()
-{
-}
+NativeFileWatcherService::NativeFileWatcherService() {}
 
-NativeFileWatcherService::~NativeFileWatcherService()
-{
-}
+NativeFileWatcherService::~NativeFileWatcherService() {}
 
 /**
  * Sets the required resources and starts the watching IO thread.
@@ -1144,38 +1110,37 @@ NativeFileWatcherService::~NativeFileWatcherService()
 nsresult
 NativeFileWatcherService::Init()
 {
-    /*
-  // Creates an IO completion port and allows at most 2 thread to access it concurrently.
-  AutoCloseHandle completionPort(
-    CreateIoCompletionPort(INVALID_HANDLE_VALUE, // FileHandle
-                           nullptr, // ExistingCompletionPort
-                           0, // CompletionKey
-                           2)); // NumberOfConcurrentThreads
-  if (!completionPort) {
-    return NS_ERROR_FAILURE;
-  }
+  /*
+// Creates an IO completion port and allows at most 2 thread to access it
+concurrently. AutoCloseHandle completionPort(
+  CreateIoCompletionPort(INVALID_HANDLE_VALUE, // FileHandle
+                         nullptr, // ExistingCompletionPort
+                         0, // CompletionKey
+                         2)); // NumberOfConcurrentThreads
+if (!completionPort) {
+  return NS_ERROR_FAILURE;
+}
 
-  // Add an observer for the shutdown.
-  nsCOMPtr<nsIObserverService> observerService =
-      mozilla::services::GetObserverService();
-  if (!observerService) {
-    return NS_ERROR_FAILURE;
-  }
+// Add an observer for the shutdown.
+nsCOMPtr<nsIObserverService> observerService =
+    mozilla::services::GetObserverService();
+if (!observerService) {
+  return NS_ERROR_FAILURE;
+}
 
-  observerService->AddObserver(this, "xpcom-shutdown-threads", false);
+observerService->AddObserver(this, "xpcom-shutdown-threads", false);
 
-  // Start the IO worker thread.
-  mWorkerIORunnable = new NativeFileWatcherIOTask(completionPort);
-  nsresult rv = NS_NewNamedThread("FileWatcher IO", getter_AddRefs(mIOThread),
-                                  mWorkerIORunnable);
-  if (NS_FAILED(rv)) {
-    FILEWATCHERLOG(
-      "NativeFileWatcherIOTask::Init - Unable to create and dispatch the worker thread (%x).",
-      rv);
-    return rv;
-  }
+// Start the IO worker thread.
+mWorkerIORunnable = new NativeFileWatcherIOTask(completionPort);
+nsresult rv = NS_NewNamedThread("FileWatcher IO", getter_AddRefs(mIOThread),
+                                mWorkerIORunnable);
+if (NS_FAILED(rv)) {
+  FILEWATCHERLOG(
+    "NativeFileWatcherIOTask::Init - Unable to create and dispatch the worker
+thread (%x).", rv); return rv;
+}
 
-  mIOCompletionPort = completionPort.forget();
+mIOCompletionPort = completionPort.forget();
 */
   return NS_OK;
 }
@@ -1194,14 +1159,15 @@ NativeFileWatcherService::Init()
  *        The optional callback to invoke when the file watcher starts
  *        watching the resource for changes.
  *
- * @return NS_OK or NS_ERROR_NOT_INITIALIZED if the instance was not initialized.
- *         Other errors are reported by the error callback function.
+ * @return NS_OK or NS_ERROR_NOT_INITIALIZED if the instance was not
+ * initialized. Other errors are reported by the error callback function.
  */
 NS_IMETHODIMP
-NativeFileWatcherService::AddPath(const nsAString& aPathToWatch,
-                                  nsINativeFileWatcherCallback* aOnChange,
-                                  nsINativeFileWatcherErrorCallback* aOnError,
-                                  nsINativeFileWatcherSuccessCallback* aOnSuccess)
+NativeFileWatcherService::AddPath(
+  const nsAString& aPathToWatch,
+  nsINativeFileWatcherCallback* aOnChange,
+  nsINativeFileWatcherErrorCallback* aOnError,
+  nsINativeFileWatcherSuccessCallback* aOnSuccess)
 {
 
   // Make sure the instance was initialized.
@@ -1222,27 +1188,27 @@ NativeFileWatcherService::AddPath(const nsAString& aPathToWatch,
     new nsMainThreadPtrHolder<nsINativeFileWatcherErrorCallback>(
       "nsINativeFileWatcherErrorCallback", aOnError));
 
-  nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> successCallbackHandle(
-    new nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
-      "nsINativeFileWatcherSuccessCallback", aOnSuccess));
+  nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>
+    successCallbackHandle(
+      new nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
+        "nsINativeFileWatcherSuccessCallback", aOnSuccess));
 
-  // Wrap the path and the callbacks in order to pass them using NewRunnableMethod.
+  // Wrap the path and the callbacks in order to pass them using
+  // NewRunnableMethod.
   UniquePtr<PathRunnablesParametersWrapper> wrappedCallbacks(
-    new PathRunnablesParametersWrapper(
-      aPathToWatch,
-      changeCallbackHandle,
-      errorCallbackHandle,
-      successCallbackHandle));
+    new PathRunnablesParametersWrapper(aPathToWatch,
+                                       changeCallbackHandle,
+                                       errorCallbackHandle,
+                                       successCallbackHandle));
 
   // Since this function does a bit of I/O stuff , run it in the IO thread.
-  nsresult rv =
-    mIOThread->Dispatch(
-      NewRunnableMethod<PathRunnablesParametersWrapper*>(
-        "NativeFileWatcherIOTask::AddPathRunnableMethod",
-        static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
-        &NativeFileWatcherIOTask::AddPathRunnableMethod,
-        wrappedCallbacks.get()),
-      nsIEventTarget::DISPATCH_NORMAL);
+  nsresult rv = mIOThread->Dispatch(
+    NewRunnableMethod<PathRunnablesParametersWrapper*>(
+      "NativeFileWatcherIOTask::AddPathRunnableMethod",
+      static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
+      &NativeFileWatcherIOTask::AddPathRunnableMethod,
+      wrappedCallbacks.get()),
+    nsIEventTarget::DISPATCH_NORMAL);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -1256,8 +1222,9 @@ NativeFileWatcherService::AddPath(const nsAString& aPathToWatch,
 }
 
 /**
- * Removes the path from the list of watched resources. Silently ignores the request
- * if the path was not being watched or the callbacks were not registered.
+ * Removes the path from the list of watched resources. Silently ignores the
+ * request if the path was not being watched or the callbacks were not
+ * registered.
  *
  * @param aPathToRemove
  *        The path of the resource to remove from the watch list.
@@ -1269,64 +1236,66 @@ NativeFileWatcherService::AddPath(const nsAString& aPathToWatch,
  *        The optional callback to invoke when the file watcher stops
  *        watching the resource for changes.
  *
- * @return NS_OK or NS_ERROR_NOT_INITIALIZED if the instance was not initialized.
- *         Other errors are reported by the error callback function.
+ * @return NS_OK or NS_ERROR_NOT_INITIALIZED if the instance was not
+ * initialized. Other errors are reported by the error callback function.
  */
 NS_IMETHODIMP
-NativeFileWatcherService::RemovePath(const nsAString& aPathToRemove,
-                                     nsINativeFileWatcherCallback* aOnChange,
-                                     nsINativeFileWatcherErrorCallback* aOnError,
-                                     nsINativeFileWatcherSuccessCallback* aOnSuccess)
+NativeFileWatcherService::RemovePath(
+  const nsAString& aPathToRemove,
+  nsINativeFileWatcherCallback* aOnChange,
+  nsINativeFileWatcherErrorCallback* aOnError,
+  nsINativeFileWatcherSuccessCallback* aOnSuccess)
 {
-    /*
-  // Make sure the instance was initialized.
-  if (!mIOThread) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
 
-  // Be sure a valid change callback was passed.
-  if (!aOnChange) {
-    return NS_ERROR_NULL_POINTER;
-  }
+    // Make sure the instance was initialized.
+    if (!mIOThread) {
+      return NS_ERROR_NOT_INITIALIZED;
+    }
 
-  nsMainThreadPtrHandle<nsINativeFileWatcherCallback> changeCallbackHandle(
-    new nsMainThreadPtrHolder<nsINativeFileWatcherCallback>(
-      "nsINativeFileWatcherCallback", aOnChange));
+    // Be sure a valid change callback was passed.
+    if (!aOnChange) {
+      return NS_ERROR_NULL_POINTER;
+    }
 
-  nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> errorCallbackHandle(
-    new nsMainThreadPtrHolder<nsINativeFileWatcherErrorCallback>(
-      "nsINativeFileWatcherErrorCallback", aOnError));
+    nsMainThreadPtrHandle<nsINativeFileWatcherCallback> changeCallbackHandle(
+      new nsMainThreadPtrHolder<nsINativeFileWatcherCallback>(
+        "nsINativeFileWatcherCallback", aOnChange));
 
-  nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> successCallbackHandle(
-    new nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
-      "nsINativeFileWatcherSuccessCallback", aOnSuccess));
+    nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> errorCallbackHandle(
+      new nsMainThreadPtrHolder<nsINativeFileWatcherErrorCallback>(
+        "nsINativeFileWatcherErrorCallback", aOnError));
 
-  // Wrap the path and the callbacks in order to pass them using NewRunnableMethod.
-  UniquePtr<PathRunnablesParametersWrapper> wrappedCallbacks(
-    new PathRunnablesParametersWrapper(
-      aPathToRemove,
-      changeCallbackHandle,
-      errorCallbackHandle,
-      successCallbackHandle));
+    nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>
+    successCallbackHandle( new
+    nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
+        "nsINativeFileWatcherSuccessCallback", aOnSuccess));
 
-  // Since this function does a bit of I/O stuff, run it in the IO thread.
-  nsresult rv =
-    mIOThread->Dispatch(
-      NewRunnableMethod<PathRunnablesParametersWrapper*>(
-        "NativeFileWatcherIOTask::RemovePathRunnableMethod",
-        static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
-        &NativeFileWatcherIOTask::RemovePathRunnableMethod,
-        wrappedCallbacks.get()),
-      nsIEventTarget::DISPATCH_NORMAL);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+    // Wrap the path and the callbacks in order to pass them using NewRunnableMethod.
+    UniquePtr<PathRunnablesParametersWrapper> wrappedCallbacks(
+      new PathRunnablesParametersWrapper(
+        aPathToRemove,
+        changeCallbackHandle,
+        errorCallbackHandle,
+        successCallbackHandle));
 
-  // Since the dispatch succeeded, we let the runnable own the pointer.
-  Unused << wrappedCallbacks.release();
+    // Since this function does a bit of I/O stuff, run it in the IO thread.
+    nsresult rv =
+      mIOThread->Dispatch(
+        NewRunnableMethod<PathRunnablesParametersWrapper*>(
+          "NativeFileWatcherIOTask::RemovePathRunnableMethod",
+          static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
+          &NativeFileWatcherIOTask::RemovePathRunnableMethod,
+          wrappedCallbacks.get()),
+        nsIEventTarget::DISPATCH_NORMAL);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
 
-  WakeUpWorkerThread();
-*/
+    // Since the dispatch succeeded, we let the runnable own the pointer.
+    Unused << wrappedCallbacks.release();
+
+    WakeUpWorkerThread();
+
   return NS_OK;
 }
 
@@ -1342,37 +1311,38 @@ NativeFileWatcherService::RemovePath(const nsAString& aPathToRemove,
  *    Uninit sends DeactivateRunnableMethod() to the WorkerThread.
  * 3. [WorkerThread]
  *    DeactivateRunnableMethod makes it clear to other methods that shutdown is
- *    in progress, stops the IO completion port wait and schedules the rest of the
- *    deactivation for after every currently pending method call is complete.
+ *    in progress, stops the IO completion port wait and schedules the rest of
+ * the deactivation for after every currently pending method call is complete.
  */
 nsresult
 NativeFileWatcherService::Uninit()
 {
-    /*
-  // Make sure the instance was initialized (and not de-initialized yet).
-  if (!mIOThread) {
-    return NS_OK;
-  }
+  /*
+// Make sure the instance was initialized (and not de-initialized yet).
+if (!mIOThread) {
+  return NS_OK;
+}
 
-  // We need to be sure that there will be no calls to 'mIOThread' once we have entered
-  // 'Uninit()', even if we exit due to an error.
-  nsCOMPtr<nsIThread> ioThread;
-  ioThread.swap(mIOThread);
+// We need to be sure that there will be no calls to 'mIOThread' once we have
+entered
+// 'Uninit()', even if we exit due to an error.
+nsCOMPtr<nsIThread> ioThread;
+ioThread.swap(mIOThread);
 
-  // Since this function does a bit of I/O stuff (close file handle), run it
-  // in the IO thread.
-  nsresult rv =
-    ioThread->Dispatch(
-      NewRunnableMethod(
-        "NativeFileWatcherIOTask::DeactivateRunnableMethod",
-        static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
-        &NativeFileWatcherIOTask::DeactivateRunnableMethod),
-      nsIEventTarget::DISPATCH_NORMAL);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
+// Since this function does a bit of I/O stuff (close file handle), run it
+// in the IO thread.
+nsresult rv =
+  ioThread->Dispatch(
+    NewRunnableMethod(
+      "NativeFileWatcherIOTask::DeactivateRunnableMethod",
+      static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
+      &NativeFileWatcherIOTask::DeactivateRunnableMethod),
+    nsIEventTarget::DISPATCH_NORMAL);
+if (NS_FAILED(rv)) {
+  return rv;
+}
 
-  WakeUpWorkerThread();
+WakeUpWorkerThread();
 */
   return NS_OK;
 }
@@ -1380,17 +1350,17 @@ NativeFileWatcherService::Uninit()
 /**
  * Tells |NativeFileWatcherIOTask| to quit and to reschedule itself in order to
  * execute the other runnables enqueued in the worker tread.
- * This works by posting a bogus event to the blocking |GetQueuedCompletionStatus|
- * call in |NativeFileWatcherIOTask::Run()|.
+ * This works by posting a bogus event to the blocking
+ * |GetQueuedCompletionStatus| call in |NativeFileWatcherIOTask::Run()|.
  */
 void
 NativeFileWatcherService::WakeUpWorkerThread()
 {
-  // The last 3 parameters represent the number of transferred bytes, the changed
-  // resource |HANDLE| and the address of the |OVERLAPPED| structure passed to
-  // GetQueuedCompletionStatus: we set them to nullptr so that we can recognize
-  // that we requested an interruption from the Worker thread.
-  //PostQueuedCompletionStatus(mIOCompletionPort, 0, 0, nullptr);
+  // The last 3 parameters represent the number of transferred bytes, the
+  // changed resource |HANDLE| and the address of the |OVERLAPPED| structure
+  // passed to GetQueuedCompletionStatus: we set them to nullptr so that we can
+  // recognize that we requested an interruption from the Worker thread.
+  // PostQueuedCompletionStatus(mIOCompletionPort, 0, 0, nullptr);
 }
 
 /**
@@ -1398,7 +1368,8 @@ NativeFileWatcherService::WakeUpWorkerThread()
  * to shutdown this service when closing the application.
  */
 NS_IMETHODIMP
-NativeFileWatcherService::Observe(nsISupports* aSubject, const char* aTopic,
+NativeFileWatcherService::Observe(nsISupports* aSubject,
+                                  const char* aTopic,
                                   const char16_t* aData)
 {
   MOZ_ASSERT(NS_IsMainThread());
@@ -1413,6 +1384,5 @@ NativeFileWatcherService::Observe(nsISupports* aSubject, const char* aTopic,
 
   return NS_ERROR_UNEXPECTED;
 }
-
 
 }
