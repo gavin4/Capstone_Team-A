@@ -1,4 +1,4 @@
-﻿#include "NativeFileWatcherLnx.h"
+#include "NativeFileWatcherLnx.h"
 
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
@@ -17,6 +17,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <queue>
+#include <cstring>
 
 namespace mozilla {
 
@@ -227,7 +228,7 @@ private:
   // NativeFileWatcherService::RemovePath.
   nsClassHashtable<nsStringHashKey, WatchedResourceDescriptor>
     mWatchedResourcesByPath;
-  nsDataHashtable<nsVoidPtrHashKey, WatchedResourceDescriptor*>
+  nsDataHashtable<nsUint32HashKey, WatchedResourceDescriptor*>
     mWatchedResourcesByHandle;
 
   // The same callback can be associated to multiple watches so we need to keep
@@ -243,7 +244,7 @@ private:
   int mInotifyFileDescriptor;
 
   // Here is the queue for the events read from inotify file descriptor
-  std::queue<inotify_event> mInotifyEventQueue;
+  std::queue<inotify_event*> mInotifyEventQueue;
 
   static volatile sig_atomic_t mEventWaiting;
 
@@ -353,8 +354,7 @@ NativeFileWatcherIOTask::RunInternal()
   // FIXME: Conversion to inotify
 
   // Check to see which resource is changedResourceHandle.
-   //WatchedResourceDescriptor* changedRes =
-   // mWatchedResourcesByHandle.Get((int)changedResourceHandle);
+
   // MOZ_ASSERT(changedRes, "Could not find the changed resource in the list of
   // watched ones.");
 
@@ -364,16 +364,56 @@ NativeFileWatcherIOTask::RunInternal()
 
   // FIXME: This is where we'll call sleep() and wait for our event handler to
   // return
-  char inotifyEventBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
-  while (
-    true) {
+  char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
+  while (true) {
       sleep(1);
       if(mEventWaiting){
           --mEventWaiting;
           //FIXME: add timeout to this while loop
-          while(read(mInotifyFileDescriptor,inotifyEventBuffer,sizeof(inotifyEventBuffer))){
-             // mInotifyEventQueue.push((inotify_event)inotifyEventBuffer);
+          while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))){
+              if (inotifyEventTempBuffer) {
+                  char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
+                  ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
+                  ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
+                  ((inotify_event*)inotifyEventBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+                  strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, sizeof(NAME_MAX));
+                  ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
+                  mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
+              }
+          }
+          while (!mInotifyEventQueue.empty()) {
+              inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
 
+
+
+              // Process event here
+              /*
+               *  if (event->mask & IN_OPEN)
+                       printf("IN_OPEN: ");
+                   if (event->mask & IN_CLOSE_NOWRITE)
+                       printf("IN_CLOSE_NOWRITE: ");
+                   if (event->mask & IN_CLOSE_WRITE)
+                       printf("IN_CLOSE_WRITE: ")
+               */
+              if (inotifyEventToProcess->mask & IN_ALL_EVENTS) {
+                  WatchedResourceDescriptor* changedRes = mWatchedResourcesByHandle.Get(inotifyEventToProcess->wd);
+                  nsString resourcePath;
+                  nsString resourceName = nsAString(inotifyEventToProcess->name, strlen(inotifyEventToProcess->name));
+                  nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
+                  if (NS_SUCCEEDED(rv)) {
+                    rv = DispatchChangeCallbacks(changedRes, resourcePath);
+                    if (NS_FAILED(rv)) {
+                      // Log that we failed to dispatch the change callbacks.
+                      FILEWATCHERLOG(
+                        "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks(%x).", rv);
+                      return rv;
+                    }
+                }
+              }
+
+              // Delete event
+              delete [] inotifyEventToProcess;
+              mInotifyEventQueue.pop();
           }
       }
       /*
@@ -534,7 +574,7 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
     // Add the resource pointer to both indexes.
     WatchedResourceDescriptor* resource = resourceDesc.release();
     mWatchedResourcesByPath.Put(wrappedParameters->mPath, resource);
-    mWatchedResourcesByHandle.Put((void*)resHandle, resource); // FIXME: This (the cast to void*) probably won't work, should review.
+    mWatchedResourcesByHandle.Put(resHandle, resource); // FIXME: This (the cast to void*) probably won't work, should review.
 
     // Dispatch the success callback.
     nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
