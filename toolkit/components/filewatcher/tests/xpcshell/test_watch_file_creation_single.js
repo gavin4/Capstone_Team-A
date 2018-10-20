@@ -27,7 +27,8 @@ add_task(async function test_watch_single_path_file_creation() {
 
   // Instantiate and initialize the native watcher.
   let watcher = makeWatcher();
-  let deferred = Promise.defer();
+/*
+    let deferred = Promise.defer();
 
   let tmpFilePath = OS.Path.join(watchedDir, tempFileName);
 
@@ -45,7 +46,8 @@ add_task(async function test_watch_single_path_file_creation() {
   // Remove the watch and free the associated memory (we need to
   // reuse 'deferred.resolve' and 'deferred.reject' to unregister).
   await promiseRemovePath(watcher, watchedDir, deferred.resolve, deferred.reject);
-
+*/
   // Remove the test directory and all of its content.
   await OS.File.removeDir(watchedDir);
+
 });
