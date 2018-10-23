@@ -141,10 +141,10 @@ private:
     nsString mChangedResource;
 };
 
-// Define these callback array types to make the code easier to read.
+    // Define these callback array types to make the code easier to read.
 typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>>
-ChangeCallbackArray;
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>>
+                ChangeCallbackArray;
+   typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>>
 ErrorCallbackArray;
 
 static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
@@ -296,7 +296,9 @@ private:
 void
 NativeFileWatcherIOTask::signalHandler(int signal)
 {
-    ++mEventWaiting;
+    if(signal == SIGIO) {
+        ++mEventWaiting;
+    }
 }
 
 /**
@@ -363,6 +365,8 @@ NativeFileWatcherIOTask::RunInternal()
     // const unsigned char* rawNotificationBuffer =
     // changedRes->mNotificationBuffer.get();
 
+    int mInotifyReadTimeout;
+
     // FIXME: This is where we'll call sleep() and wait for our event handler to
     // return
     char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
@@ -370,19 +374,30 @@ NativeFileWatcherIOTask::RunInternal()
         sleep(1);
         if(mEventWaiting){
             --mEventWaiting;
-            //FIXME: add timeout to this while loop
-            while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))){
-                if (inotifyEventTempBuffer) {
-                    char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
-                    ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
-                    ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
-                    ((inotify_event*)inotifyEventBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-                    strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, sizeof(NAME_MAX));
-                    ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
-                    mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
-                }
+            mInotifyReadTimeout = 1000;
+
+            volatile int readReturnValue = read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer));
+            volatile int wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
+            volatile int mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+            volatile char* name = ((inotify_event*)inotifyEventTempBuffer)->name;
+
+            while(readReturnValue > 0 && --mInotifyReadTimeout > 0){
+                char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
+                ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
+                ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
+                ((inotify_event*)inotifyEventBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+                strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, sizeof(NAME_MAX));
+                ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
+                mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
+
+                readReturnValue = read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer));
+                wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
+                mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+                name = ((inotify_event*)inotifyEventTempBuffer)->name;
             }
-            while (!mInotifyEventQueue.empty()) {
+
+            mInotifyReadTimeout = 1000;
+            while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
                 inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
 
 
@@ -416,6 +431,11 @@ NativeFileWatcherIOTask::RunInternal()
                 delete [] inotifyEventToProcess;
                 mInotifyEventQueue.pop();
             }
+        }
+
+        // if we don't have anything left to watch, exit.
+        if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
+            break;
         }
     }
 
@@ -503,20 +523,37 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
         return NS_OK;
     }
 
-    // FIXME: This is where we'll call intofiy_add_watch()
     // Retrieve a file handle to associate with the completion port. Makes
     // sure to request the appropriate rights (i.e. read files and list
     // files contained in a folder). Note: the nullptr security flag prevents
     // the |int| to be passed to child processes.
-
+    char* localPath = ToNewCString(wrappedParameters->mPath);
     int resHandle = inotify_add_watch(mInotifyFileDescriptor,
-                                      (char*)wrappedParameters->mPath.get(),
+                                      localPath,
                                       IN_ALL_EVENTS);
+
     if (resHandle == -1) {
+        // FIXME: This locks up, and is where we left off
+        //MOZ_CRASH();
+
         FILEWATCHERLOG(
                     "NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
-        return NS_ERROR_ABORT;
+
+        // This could fail because passed parameters could be invalid |HANDLE|s
+        // i.e. mIOCompletionPort was unexpectedly closed or failed.
+        nsresult rv =
+          ReportError(wrappedParameters->mErrorCallbackHandle, NS_ERROR_UNEXPECTED, static_cast<long>(resHandle));
+        if (NS_FAILED(rv)) {
+          FILEWATCHERLOG(
+            "NativeFileWatcherIOTask::AddPathRunnableMethod - "
+            "Failed to dispatch the error callback (%x).",
+            rv);
+          return rv;
+        }
+
+        return NS_ERROR_FAILURE;
     }
+
     // Initialise the resource descriptor.
     UniquePtr<WatchedResourceDescriptor> resourceDesc(
                 new WatchedResourceDescriptor(wrappedParameters->mPath, resHandle));
@@ -1157,7 +1194,6 @@ NativeFileWatcherService::AddPath(
         nsINativeFileWatcherErrorCallback* aOnError,
         nsINativeFileWatcherSuccessCallback* aOnSuccess)
 {
-
     // Make sure the instance was initialized.
     if (!mIOThread) {
         return NS_ERROR_NOT_INITIALIZED;
@@ -1305,7 +1341,6 @@ NativeFileWatcherService::RemovePath(
 nsresult
 NativeFileWatcherService::Uninit()
 {
-
     // Make sure the instance was initialized (and not de-initialized yet).
     if (!mIOThread) {
         return NS_OK;
