@@ -18,6 +18,9 @@
 #include <cstdlib>
 #include <queue>
 #include <cstring>
+#include <errno.h>
+
+#include <iostream>
 
 namespace mozilla {
 
@@ -243,7 +246,7 @@ private:
     bool mShuttingDown;
 
     // Main inotify file descriptor
-    int mInotifyFileDescriptor;
+    int mInotifyFileDescriptor = -1;
 
     // Here is the queue for the events read from inotify file descriptor
     std::queue<inotify_event*> mInotifyEventQueue;
@@ -316,20 +319,20 @@ NativeFileWatcherIOTask::RunInternal()
     // (used to check for |int| closing).
     ssize_t transferredBytes = 0;
 
-    mInotifyFileDescriptor = inotify_init();
-    if (mInotifyFileDescriptor == -1) {
-        FILEWATCHERLOG("NativeFileWatcherIOTask::Run - inotify fail initialize");
-        return NS_ERROR_ABORT;
+    if(mInotifyFileDescriptor == -1) {
+        mInotifyFileDescriptor = inotify_init();
+        if (mInotifyFileDescriptor == -1) {
+            FILEWATCHERLOG("NativeFileWatcherIOTask::Run - inotify fail initialize");
+            return NS_ERROR_ABORT;
+        }
     }
 
     /**********************************/
     /* Set up signal handler.  */
     // Set up the struct that will configure our handler.
     struct sigaction sa; // Describes the action to take on a process's signals.
-    sigemptyset(
-                &sa.sa_mask); // Init the signal mask field for those we want to ignore.
-    sa.sa_flags =
-            SA_RESTART; // Restart? FIXME: why this is, can I/should I change?
+    sigemptyset(&sa.sa_mask); // Init the signal mask field for those we want to ignore.
+    sa.sa_flags = SA_RESTART; // Restart? FIXME: why this is, can I/should I change?
     sa.sa_handler = this->signalHandler; // Set the method we want to use as a
     // handler for the signal.
 
@@ -346,8 +349,7 @@ NativeFileWatcherIOTask::RunInternal()
     }
 
     int flags = fcntl(mInotifyFileDescriptor, F_GETFL);
-    if (fcntl(mInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) ==
-            -1) {
+    if (fcntl(mInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) == -1) {
         FILEWATCHERLOG("failed to set the file descriptor to async and nonblock.\n");
         return NS_ERROR_ABORT;
     }
@@ -376,45 +378,30 @@ NativeFileWatcherIOTask::RunInternal()
             --mEventWaiting;
             mInotifyReadTimeout = 1000;
 
-            volatile int readReturnValue = read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer));
-            volatile int wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
-            volatile int mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-            volatile char* name = ((inotify_event*)inotifyEventTempBuffer)->name;
-
-            while(readReturnValue > 0 && --mInotifyReadTimeout > 0){
+            while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))> 0 && --mInotifyReadTimeout > 0){
                 char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
                 ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
                 ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
                 ((inotify_event*)inotifyEventBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-                strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, sizeof(NAME_MAX));
+                strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->len);
                 ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
                 mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
 
-                readReturnValue = read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer));
-                wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
-                mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-                name = ((inotify_event*)inotifyEventTempBuffer)->name;
+                ((inotify_event*)inotifyEventTempBuffer)->cookie = 0;
+                ((inotify_event*)inotifyEventTempBuffer)->len = 0;
+                ((inotify_event*)inotifyEventTempBuffer)->mask = 0;
+                ((inotify_event*)inotifyEventTempBuffer)->name[0] = '\0';
+                ((inotify_event*)inotifyEventTempBuffer)->wd = 0;
             }
-
             mInotifyReadTimeout = 1000;
             while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
                 inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
 
-
-
-                // Process event here
-                /*
-               *  if (event->mask & IN_OPEN)
-                       printf("IN_OPEN: ");
-                   if (event->mask & IN_CLOSE_NOWRITE)
-                       printf("IN_CLOSE_NOWRITE: ");
-                   if (event->mask & IN_CLOSE_WRITE)
-                       printf("IN_CLOSE_WRITE: ")
-               */
                 if (inotifyEventToProcess->mask & IN_ALL_EVENTS) {
                     WatchedResourceDescriptor* changedRes = mWatchedResourcesByHandle.Get(inotifyEventToProcess->wd);
+
                     nsString resourcePath;
-                    nsString resourceName = NS_ConvertASCIItoUTF16(inotifyEventToProcess->name);//nsAString(inotifyEventToProcess->name, strlen(inotifyEventToProcess->name));
+                    nsString resourceName = NS_ConvertASCIItoUTF16(inotifyEventToProcess->name);
                     nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
                     if (NS_SUCCEEDED(rv)) {
                         rv = DispatchChangeCallbacks(changedRes, resourcePath);
@@ -434,7 +421,7 @@ NativeFileWatcherIOTask::RunInternal()
         }
 
         // if we don't have anything left to watch, exit.
-        if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
+        if(mWatchedResourcesByHandle.Count() == 0 || mWatchedResourcesByPath.Count() == 0) {
             break;
         }
     }
@@ -668,6 +655,7 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
 
     bool removed = changeCallbackArray->RemoveElement(
                 wrappedParameters->mChangeCallbackHandle);
+
     if (!removed) {
         FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
                        "to remove the change "
@@ -1289,10 +1277,9 @@ NativeFileWatcherService::RemovePath(
                 new nsMainThreadPtrHolder<nsINativeFileWatcherErrorCallback>(
                     "nsINativeFileWatcherErrorCallback", aOnError));
 
-    nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>
-            successCallbackHandle( new
-                                   nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
-                                       "nsINativeFileWatcherSuccessCallback", aOnSuccess));
+    nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> successCallbackHandle(
+                new nsMainThreadPtrHolder<nsINativeFileWatcherSuccessCallback>(
+                    "nsINativeFileWatcherSuccessCallback", aOnSuccess));
 
     // Wrap the path and the callbacks in order to pass them using NewRunnableMethod.
     UniquePtr<PathRunnablesParametersWrapper> wrappedCallbacks(
@@ -1302,9 +1289,8 @@ NativeFileWatcherService::RemovePath(
                     errorCallbackHandle,
                     successCallbackHandle));
 
-    // Since this function does a bit of I/O stuff, run it in the IO thread.
-    nsresult rv =
-            mIOThread->Dispatch(
+    // Since this function does a bit of I/O stuff , run it in the IO thread.
+    nsresult rv = mIOThread->Dispatch(
                 NewRunnableMethod<PathRunnablesParametersWrapper*>(
                     "NativeFileWatcherIOTask::RemovePathRunnableMethod",
                     static_cast<NativeFileWatcherIOTask*>(mWorkerIORunnable.get()),
