@@ -144,16 +144,20 @@ private:
     nsString mChangedResource;
 };
 
-    // Define these callback array types to make the code easier to read.
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>>
-                ChangeCallbackArray;
-   typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>>
-ErrorCallbackArray;
+
+// Define these callback array types to make the code easier to read.
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>> ChangeCallbackArray;
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>> ErrorCallbackArray;
+
 
 static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
 #define FILEWATCHERLOG(...)                                                    \
     MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
+
+/**
+ * A structure to hold the information about a single inotify watch descriptor.
+ */
 struct WatchedResourceDescriptor
 {
     // The path on the file system of the watched resource.
@@ -178,8 +182,7 @@ struct PathRunnablesParametersWrapper
     nsString mPath;
     nsMainThreadPtrHandle<nsINativeFileWatcherCallback> mChangeCallbackHandle;
     nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback> mErrorCallbackHandle;
-    nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback>
-    mSuccessCallbackHandle;
+    nsMainThreadPtrHandle<nsINativeFileWatcherSuccessCallback> mSuccessCallbackHandle;
 
     PathRunnablesParametersWrapper(
             const nsAString& aPath,
@@ -197,22 +200,21 @@ struct PathRunnablesParametersWrapper
 
 /**
  * This runnable is dispatched from the main thread to get the notifications of
- * the changes in the watched resources by continuously calling the blocking
- * function GetQueuedCompletionStatus. This function queries the status of the
- * Completion I/O port initialized in the main thread. The watched resources are
- * registered to the completion I/O port when calling |addPath|.
+ * the changes in the watched resources by handling and acting on signals from
+ * the kernel.
  *
- * Instead of using a loop within the Run() method, the Runnable reschedules
- * itself by issuing a NS_DispatchToCurrentThread(this) before exiting. This is
- * done to allow the execution of other runnables enqueued within the thread
- * task queue.
+ * This is accomplished with non-blocking reads from an inotify file descriptor
+ * when the signal handler tied to the inotify file descriptor increments an
+ * event counter. Callbacks are then dispatched depending on the type of event
+ * the inotify_event read from the file descriptor describes.
  */
 class NativeFileWatcherIOTask : public Runnable
 {
 public:
-    explicit NativeFileWatcherIOTask()
+    explicit NativeFileWatcherIOTask(int inotifyFileDescriptor)
         : Runnable("NativeFileWatcherIOTask")
         , mShuttingDown(false)
+        , mInotifyFileDescriptor(inotifyFileDescriptor)
     {
     }
 
@@ -224,9 +226,9 @@ public:
     nsresult DeactivateRunnableMethod();
 
 private:
-    // Maintain 2 indexes - one by resource path, one by resource |HANDLE|.
-    // Since |HANDLE| is basically a typedef to void*, we use nsVoidPtrHashKey to
-    // compute the hashing key. We need 2 indexes in order to quickly look up the
+    // Maintain 2 indexes - one by resource path, one by inotify watch descriptor.
+    // Since our watch descriptor is an int, we use nsUint32HashKey to compute the
+    // hashing key. We need 2 indexes in order to quickly look up the
     // changed resource in the Worker Thread.
     // The objects are not ref counted and get destroyed by
     // mWatchedResourcesByPath on NativeFileWatcherService::Destroy or in
@@ -245,14 +247,11 @@ private:
     // Other methods need to know that a shutdown is in progress.
     bool mShuttingDown;
 
-    // Main inotify file descriptor
-    int mInotifyFileDescriptor = -1;
+    // Main inotify file descriptor (initialized in NativeFileWatcher's Init())
+    int mInotifyFileDescriptor;
 
     // Here is the queue for the events read from inotify file descriptor
     std::queue<inotify_event*> mInotifyEventQueue;
-
-
-    static void signalHandler(int signal);
 
     nsresult RunInternal();
 
@@ -296,14 +295,6 @@ private:
                               nsAString& nativeResourcePath);
 };
 
-void
-NativeFileWatcherIOTask::signalHandler(int signal)
-{
-    if(signal == SIGIO) {
-        ++mEventWaiting;
-    }
-}
-
 /**
  * The watching thread logic.
  *
@@ -313,71 +304,27 @@ NativeFileWatcherIOTask::signalHandler(int signal)
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-    // FIXME: This will hold the number of bytes from a read on the inotify file
-    // descirptor
-    // The number of bytes transferred by GetQueuedCompletionStatus
-    // (used to check for |int| closing).
-    ssize_t transferredBytes = 0;
-
-    if(mInotifyFileDescriptor == -1) {
-        mInotifyFileDescriptor = inotify_init();
-        if (mInotifyFileDescriptor == -1) {
-            FILEWATCHERLOG("NativeFileWatcherIOTask::Run - inotify fail initialize");
-            return NS_ERROR_ABORT;
-        }
-    }
-
-    /**********************************/
-    /* Set up signal handler.  */
-    // Set up the struct that will configure our handler.
-    struct sigaction sa; // Describes the action to take on a process's signals.
-    sigemptyset(&sa.sa_mask); // Init the signal mask field for those we want to ignore.
-    sa.sa_flags = SA_RESTART; // Restart? FIXME: why this is, can I/should I change?
-    sa.sa_handler = this->signalHandler; // Set the method we want to use as a
-    // handler for the signal.
-
-    // Register the handler. Check for error.
-    if (sigaction(SIGIO, &sa, NULL) == -1) {
-        FILEWATCHERLOG("Failed to register handler!");
-        return NS_ERROR_ABORT;
-    }
-
-    // Allow process to receive I/O signals from the file descriptor.
-    if (fcntl(mInotifyFileDescriptor, F_SETOWN, getpid()) == -1) {
-        FILEWATCHERLOG("Failed to set F_SETOWN!");
-        return NS_ERROR_ABORT;
-    }
-
-    int flags = fcntl(mInotifyFileDescriptor, F_GETFL);
-    if (fcntl(mInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) == -1) {
-        FILEWATCHERLOG("failed to set the file descriptor to async and nonblock.\n");
-        return NS_ERROR_ABORT;
-    }
-
-    /************************************/
-
-    // FIXME: Conversion to inotify
-
-    // Check to see which resource is changedResourceHandle.
-
-    // MOZ_ASSERT(changedRes, "Could not find the changed resource in the list of
-    // watched ones.");
-
-    // Parse the changes and notify the main thread.
-    // const unsigned char* rawNotificationBuffer =
-    // changedRes->mNotificationBuffer.get();
-
     int mInotifyReadTimeout;
-
-    // FIXME: This is where we'll call sleep() and wait for our event handler to
-    // return
     char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
-    while (true) {
-        sleep(1);
-        if(mEventWaiting){
-            --mEventWaiting;
-            mInotifyReadTimeout = 1000;
 
+    while (true) {
+
+        // Sleep to keep thread in suspended state until event occurs. Will return early as soon as an
+        // event occurs (our signal handler is triggered).
+        sleep(1);
+
+        // If we've slept for one second (or we returned early due to a file system event), we should check
+        // for events waiting to be read from the file descriptor.
+        if(mEventWaiting){
+            --mEventWaiting; // Decrement an event, since we're acting on one of them.
+
+            mInotifyReadTimeout = 1000; // Timeout in case while loop runs forever.
+
+            // Here we're going to read all available inotify_events from the file descriptor, since we know an event
+            // occured (due to the increment in our signal handler and the non-zero value of mEventWaiting.
+            //
+            // Since it's a file descriptor with a possibly limited buffer, we'll read all available events as fast as
+            // we can and store safely into a queue for later processing.
             while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))> 0 && --mInotifyReadTimeout > 0){
                 char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
                 ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
@@ -393,6 +340,8 @@ NativeFileWatcherIOTask::RunInternal()
                 ((inotify_event*)inotifyEventTempBuffer)->name[0] = '\0';
                 ((inotify_event*)inotifyEventTempBuffer)->wd = 0;
             }
+
+            // Reset timeout and start processing from our queue of events. Call related callbacks when appropriate.
             mInotifyReadTimeout = 1000;
             while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
                 inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
@@ -414,14 +363,16 @@ NativeFileWatcherIOTask::RunInternal()
                     }
                 }
 
-                // Delete event
+                // Delete event now that we've processed it.
                 delete [] inotifyEventToProcess;
                 mInotifyEventQueue.pop();
             }
+
+            break; // Break and let loop be rescheduled since we've processed all recently available events.
         }
 
-        // if we don't have anything left to watch, exit.
-        if(mWatchedResourcesByHandle.Count() == 0 || mWatchedResourcesByPath.Count() == 0) {
+        // If we don't have anything left to watch, exit. // FIXME: Should this return ERR to prevent reschedule?
+        if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
             break;
         }
     }
@@ -459,8 +410,8 @@ NativeFileWatcherIOTask::Run()
         return NS_OK;
     }
 
-    // No error occurred, reschedule.
-    return NS_DispatchToCurrentThread(this);
+    // No error occurred, reschedule. // FIXME: this is fucked.
+    return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh. *** SO WE'RE RE-SCHEDULING AS PART OF NORMAL OPERATION.
 }
 
 /**
@@ -646,6 +597,9 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
         return NS_OK;
     }
 
+//    mWatchedResourcesByPath.Put(wrappedParameters->mPath, resource);
+//    mWatchedResourcesByHandle
+
     // Hash table points to an array of callbacks.
     ChangeCallbackArray* changeCallbackArray =
             mChangeCallbacksTable.Get(toRemove->mPath);
@@ -702,6 +656,10 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
                        wrappedParameters->mPath.get());
         return NS_ERROR_ABORT;
     }
+
+    // Since there's no callbacks left, let's remove entries from the hash tables.
+    mWatchedResourcesByPath.Remove(toRemove->mPath);
+    mWatchedResourcesByHandle.Remove(toRemove->mWatchedResourceDescriptor);
 
     // Dispatch the success callback.
     nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
@@ -1126,6 +1084,14 @@ NativeFileWatcherService::NativeFileWatcherService() {}
 
 NativeFileWatcherService::~NativeFileWatcherService() {}
 
+void
+NativeFileWatcherService::signalHandler(int signal)
+{
+    if(signal == SIGIO) {
+        ++mEventWaiting;
+    }
+}
+
 /**
  * Sets the required resources and starts the watching IO thread.
  *
@@ -1134,7 +1100,38 @@ NativeFileWatcherService::~NativeFileWatcherService() {}
 nsresult
 NativeFileWatcherService::Init()
 {
+    // Initialize the inotify file descriptor.
+    int startupInotifyFileDescriptor = -1;
+    startupInotifyFileDescriptor = inotify_init();
+    if (startupInotifyFileDescriptor == -1) {
+        FILEWATCHERLOG("NativeFileWatcherIOTask::Run - inotify fail initialize");
+        return NS_ERROR_FAILURE;
+    }
 
+    // Set up signal handler config structure.
+    struct sigaction sa;                 // Describes the action to take on a process's signals.
+    sigemptyset(&sa.sa_mask);            // Init the signal mask field for those we want to ignore.
+    sa.sa_flags = SA_RESTART;            // Restart
+    sa.sa_handler = this->signalHandler; // Set the method we want to use as a handler for the signal.
+
+    // Register the handler. Check for error.
+    if (sigaction(SIGIO, &sa, NULL) == -1) {
+        FILEWATCHERLOG("Failed to register handler!");
+        return NS_ERROR_ABORT;
+    }
+
+    // Allow process to receive I/O signals from the file descriptor.
+    if (fcntl(startupInotifyFileDescriptor, F_SETOWN, getpid()) == -1) {
+        FILEWATCHERLOG("Failed to set F_SETOWN!");
+        return NS_ERROR_ABORT;
+    }
+
+    // Set async and nonblocking reads on the file descriptor.
+    int flags = fcntl(startupInotifyFileDescriptor, F_GETFL);
+    if (fcntl(startupInotifyFileDescriptor, F_SETFL, flags | O_ASYNC | O_NONBLOCK) == -1) {
+        FILEWATCHERLOG("failed to set the file descriptor to async and nonblock.\n");
+        return NS_ERROR_ABORT;
+    }
 
     // Add an observer for the shutdown.
     nsCOMPtr<nsIObserverService> observerService =
@@ -1146,12 +1143,11 @@ NativeFileWatcherService::Init()
     observerService->AddObserver(this, "xpcom-shutdown-threads", false);
 
     // Start the IO worker thread.
-    mWorkerIORunnable = new NativeFileWatcherIOTask();
+    mWorkerIORunnable = new NativeFileWatcherIOTask(startupInotifyFileDescriptor);
     nsresult rv = NS_NewNamedThread("FileWatcher IO", getter_AddRefs(mIOThread),
                                     mWorkerIORunnable);
     if (NS_FAILED(rv)) {
-        FILEWATCHERLOG(
-                    "NativeFileWatcherIOTask::Init - Unable to create and dispatch the workerthread (%x).", rv);
+        FILEWATCHERLOG("NativeFileWatcherIOTask::Init - Unable to create and dispatch the workerthread (%x).", rv);
         return rv;
     }
 
@@ -1369,7 +1365,7 @@ NativeFileWatcherService::WakeUpWorkerThread()
     // PostQueuedCompletionStatus(mIOCompletionPort, 0, 0, nullptr);
 }
 
-/**
+/**er
  * This method is used to catch the "xpcom-shutdown-threads" event in order
  * to shutdown this service when closing the application.
  */

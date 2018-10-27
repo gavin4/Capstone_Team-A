@@ -29,6 +29,8 @@ private:
   // The instance of the runnable dealing with the I/O.
   nsCOMPtr<nsIRunnable> mWorkerIORunnable;
 
+  static void signalHandler(int signal);
+
   nsresult Uninit();
   void WakeUpWorkerThread();
 

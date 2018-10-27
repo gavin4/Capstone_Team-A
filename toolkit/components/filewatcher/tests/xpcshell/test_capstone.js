@@ -31,13 +31,16 @@ add_task(async function test_capstone() {
   let deferred = Promise.defer();
 
   let tmpFilePath = OS.Path.join(watchedDir, tempFileName);
+    print("*** -2");
 
   // Add the profile directory to the watch list and wait for the file watcher
   // to start watching.
   await promiseAddPath(watcher, watchedDir, deferred.resolve, deferred.reject);
+    print("*** -1");
 
   // create the file within the watched directory.
   await OS.File.writeAtomic(tmpFilePath, "some data");
+    print("*** 0");
 
   // Wait until the watcher informs us that the file was created.
   let changed = await deferred.promise;
