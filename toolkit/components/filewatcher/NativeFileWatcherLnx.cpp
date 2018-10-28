@@ -307,11 +307,11 @@ NativeFileWatcherIOTask::RunInternal()
     int mInotifyReadTimeout;
     char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
 
+    // FIXME: We can probably remove this now. Keep for now until sure we can rely on task rescheduling instead of a loop.
     while (true) {
-
         // Sleep to keep thread in suspended state until event occurs. Will return early as soon as an
         // event occurs (our signal handler is triggered).
-        sleep(1);
+        sleep(0.01);
 
         // If we've slept for one second (or we returned early due to a file system event), we should check
         // for events waiting to be read from the file descriptor.
@@ -367,14 +367,16 @@ NativeFileWatcherIOTask::RunInternal()
                 delete [] inotifyEventToProcess;
                 mInotifyEventQueue.pop();
             }
-
-            break; // Break and let loop be rescheduled since we've processed all recently available events.
         }
 
         // If we don't have anything left to watch, exit. // FIXME: Should this return ERR to prevent reschedule?
+        // FIXME: Maybe this logic should be moved up into the run() thread and handled before (in-between) thread reschedule?
+        //        This may be true of other logic as well, investigate.
         if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
             break;
         }
+
+        break; // Break and let loop get rescheduled in Run().
     }
 
     return NS_OK;
@@ -410,8 +412,9 @@ NativeFileWatcherIOTask::Run()
         return NS_OK;
     }
 
-    // No error occurred, reschedule. // FIXME: this is fucked.
-    return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh. *** SO WE'RE RE-SCHEDULING AS PART OF NORMAL OPERATION.
+    // No error occurred, reschedule. // FIXME: this is fucked? Maybe not.
+    return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh.
+                                             // *** SO WE'RE RE-SCHEDULING AS PART OF NORMAL OPERATION. <<<<<
 }
 
 /**
@@ -442,43 +445,39 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
         return NS_OK;
     }
 
+    // Check for valid parameters and callbacks.
     if (!wrappedParameters || !wrappedParameters->mChangeCallbackHandle) {
         FILEWATCHERLOG(
                     "NativeFileWatcherIOTask::AddPathRunnableMethod - Invalid arguments.");
         return NS_ERROR_NULL_POINTER;
     }
 
+    char* localPath = ToNewCString(wrappedParameters->mPath);
+
+    // Does the path exist? Notify if not. // FIXME: Left off here Saturday trying to get test_watch_resource passing.
+    // We need a correct error condition for this.
+    if (!access(localPath, F_OK)) {
+        FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - File does not exist.");
+        return NS_ERROR_FILE_NOT_FOUND;
+    }
+
     // Is aPathToWatch already being watched?
-    WatchedResourceDescriptor* watchedResource =
-            mWatchedResourcesByPath.Get(wrappedParameters->mPath);
+    WatchedResourceDescriptor* watchedResource = mWatchedResourcesByPath.Get(wrappedParameters->mPath);
     if (watchedResource) {
-        // If it exists, append it to the hash tables. If not, go to the next
-        // function.
+        // If it exists, append new callbacks the hash tables.
         AppendCallbacksToHashtables(watchedResource->mPath,
                                     wrappedParameters->mChangeCallbackHandle,
                                     wrappedParameters->mErrorCallbackHandle);
-
         return NS_OK;
     }
 
-    // Retrieve a file handle to associate with the completion port. Makes
-    // sure to request the appropriate rights (i.e. read files and list
-    // files contained in a folder). Note: the nullptr security flag prevents
-    // the |int| to be passed to child processes.
-    char* localPath = ToNewCString(wrappedParameters->mPath);
-    int resHandle = inotify_add_watch(mInotifyFileDescriptor,
-                                      localPath,
-                                      IN_ALL_EVENTS);
+    // Get our path into a c-string compatible format for inotify, and add a watch for that path.
+    int resHandle = inotify_add_watch(mInotifyFileDescriptor, localPath, IN_ALL_EVENTS);
 
+    // Check that adding the path to the inotify instance was sucessfull. Report error if not.
     if (resHandle == -1) {
-        // FIXME: This locks up, and is where we left off
-        //MOZ_CRASH();
+        FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
 
-        FILEWATCHERLOG(
-                    "NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
-
-        // This could fail because passed parameters could be invalid |HANDLE|s
-        // i.e. mIOCompletionPort was unexpectedly closed or failed.
         nsresult rv =
           ReportError(wrappedParameters->mErrorCallbackHandle, NS_ERROR_UNEXPECTED, static_cast<long>(resHandle));
         if (NS_FAILED(rv)) {
