@@ -19,6 +19,11 @@ elif CONFIG['OS_TARGET'] == 'Linux':
     UNIFIED_SOURCES += [
         'NativeFileWatcherLnx.cpp',
     ]
+elif CONFIG['OS_TARGET'] == 'Darwin':
+    EXPORTS += ['NativeFileWatcherMac.h']
+    UNIFIED_SOURCES += [
+        'NativeFileWatcherMac.cpp',
+    ]
 else:
     EXPORTS += ['NativeFileWatcherNotSupported.h']
 

@@ -41,8 +41,10 @@
 
 #if defined(XP_WIN)
 #include "NativeFileWatcherWin.h"
-#elif defined (XP_UNIX)
+#elif defined (XP_LINUX)
 #include "NativeFileWatcherLnx.h"
+#elif defined (XP_MACOSX)
+#include "NativeFileWatcherMac.h"
 #else
 #include "NativeFileWatcherNotSupported.h"
 #endif
