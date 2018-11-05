@@ -11,7 +11,6 @@
 #include "mozilla/Logging.h"
 #include "mozilla/Scoped.h"
 
-#include <CoreServices/CoreServices.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <csignal>
@@ -212,6 +211,7 @@ public:
     explicit NativeFileWatcherIOTask()
         : Runnable("NativeFileWatcherIOTask")
         , mShuttingDown(false)
+        , mEventStreamRef(nullptr)
     {
     }
 
@@ -246,6 +246,15 @@ private:
 
     // Main inotify file descriptor (initialized in NativeFileWatcher's Init())
     int mInotifyFileDescriptor;
+
+    FSEventStreamRef mEventStreamRef;
+
+    void fsevents_callback(ConstFSEventStreamRef streamRef,
+                                               void *clientCallBackInfo,
+                                               size_t numEvents,
+                                               void *eventPaths,
+                                               const FSEventStreamEventFlags eventFlags[],
+                                               const FSEventStreamEventId eventIds[]);
 
     // Here is the queue for the events read from inotify file descriptor
     //std::queue<inotify_event*> mInotifyEventQueue;
@@ -471,6 +480,15 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
     // Get our path into a c-string compatible format for inotify, and add a watch for that path.
     int resHandle = 0; //inotify_add_watch(mInotifyFileDescriptor, localPath, IN_ALL_EVENTS);
+
+    //Making stream context
+    auto* context = new FSEventStreamContext();
+    CFArrayRef PathsToWatch = CFArrayCreate();  // TODO: WE ARE HERE
+    //Check for null on handle, Create stream if null.
+    if (!mEventStreamRef) {
+        mEventStreamRef = FSEventStreamCreate(nullptr, &NativeFileWatcherIOTask::fsevents_callback, context, )
+    }
+
 
     // Check that adding the path to the inotify instance was sucessfull. Report error if not.
     if (resHandle == -1) {
@@ -1069,6 +1087,42 @@ NativeFileWatcherIOTask::MakeResourcePath(
     return NS_OK;
 }
 
+void NativeFileWatcherIOTask::fsevents_callback(ConstFSEventStreamRef streamRef,
+                                           void *clientCallBackInfo,
+                                           size_t numEvents,
+                                           void *eventPaths,
+                                           const FSEventStreamEventFlags eventFlags[],
+                                           const FSEventStreamEventId eventIds[])
+  {
+    /*
+    auto *fse_monitor = static_cast<fsevents_monitor *> (clientCallBackInfo);
+
+    if (!fse_monitor)
+    {
+      throw libfsw_exception(_("The callback info cannot be cast to fsevents_monitor."));
+    }
+
+    // Build the notification objects.
+    std::vector<event> events;
+
+    time_t curr_time;
+    time(&curr_time);
+
+    for (size_t i = 0; i < numEvents; ++i)
+    {
+      events.emplace_back(((char **) eventPaths)[i],
+                          curr_time,
+                          decode_flags(eventFlags[i]));
+    }
+
+    if (!events.empty())
+    {
+      fse_monitor->notify_events(events);
+    }
+    */
+  }
+
+
 } // namespace
 
 // The NativeFileWatcherService component
@@ -1097,7 +1151,7 @@ NativeFileWatcherService::signalHandler(int signal)
 nsresult
 NativeFileWatcherService::Init()
 {
-    MOZ_ASSERT(false); // known fail
+
 //    // Initialize the inotify file descriptor.
 //    int startupInotifyFileDescriptor = -1;
 //    startupInotifyFileDescriptor = inotify_init();

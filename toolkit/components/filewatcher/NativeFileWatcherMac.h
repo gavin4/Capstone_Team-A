@@ -6,6 +6,7 @@
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsThreadUtils.h"
+#include <CoreServices/CoreServices.h>
 
 namespace mozilla {
 
@@ -15,6 +16,7 @@ class NativeFileWatcherService final
 {
 public:
   NS_DECL_ISUPPORTS
+
   NS_DECL_NSINATIVEFILEWATCHERSERVICE
   NS_DECL_NSIOBSERVER
 
