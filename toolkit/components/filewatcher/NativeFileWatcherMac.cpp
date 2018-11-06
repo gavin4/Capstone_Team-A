@@ -21,6 +21,8 @@
 
 #include <iostream>
 
+#include <CoreServices/Components.k.h>
+
 namespace mozilla {
 
 namespace {
@@ -159,13 +161,8 @@ struct WatchedResourceDescriptor
 {
     // The path on the file system of the watched resource.
     nsString mPath;
-
-    // The watched descriptor returned from inotify_add_watch().
-    int mWatchedResourceDescriptor;
-
-    WatchedResourceDescriptor(const nsAString& aPath, const int anHandle)
+    WatchedResourceDescriptor(const nsAString& aPath)
         : mPath(aPath)
-        , mWatchedResourceDescriptor(anHandle)
     {
     }
 };
@@ -232,8 +229,6 @@ private:
     // NativeFileWatcherService::RemovePath.
     nsClassHashtable<nsStringHashKey, WatchedResourceDescriptor>
     mWatchedResourcesByPath;
-    nsDataHashtable<nsUint32HashKey, WatchedResourceDescriptor*>
-    mWatchedResourcesByHandle;
 
     // The same callback can be associated to multiple watches so we need to keep
     // them alive as long as there is a watch using them. We create two hashtables
@@ -248,8 +243,8 @@ private:
     int mInotifyFileDescriptor;
 
     FSEventStreamRef mEventStreamRef;
-
-    void fsevents_callback(ConstFSEventStreamRef streamRef,
+    CFRunLoopRef mRunLoop = nullptr;
+    static void fsevents_callback(ConstFSEventStreamRef streamRef,
                                                void *clientCallBackInfo,
                                                size_t numEvents,
                                                void *eventPaths,
@@ -478,24 +473,58 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
         return NS_OK;
     }
 
-    // Get our path into a c-string compatible format for inotify, and add a watch for that path.
-    int resHandle = 0; //inotify_add_watch(mInotifyFileDescriptor, localPath, IN_ALL_EVENTS);
+    //Making stream context for stream creation.
+    auto *context = new FSEventStreamContext();
+    context->version = 0;
+    context->info = this;
+    context->retain = nullptr;
+    context->release = nullptr;
+    context->copyDescription = nullptr;
 
-    //Making stream context
-    auto* context = new FSEventStreamContext();
-    CFArrayRef PathsToWatch = CFArrayCreate();  // TODO: WE ARE HERE
-    //Check for null on handle, Create stream if null.
-    if (!mEventStreamRef) {
-        mEventStreamRef = FSEventStreamCreate(nullptr, &NativeFileWatcherIOTask::fsevents_callback, context, )
+    // Converting from cstring to CFStringRef (Required for CreateStream)
+    CFStringRef pathToAdd = CFStringCreateWithCString(nullptr, localPath, kCFStringEncodingASCII);
+    std::vector<CFStringRef> dirs;
+    dirs.push_back(pathToAdd);
+
+
+
+    // Setting flags for stream creation.
+    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
+
+    if (mEventStreamRef) {
+            CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
+            for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
+               dirs.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
+            }
     }
+    // Creating a CFArray for stream creation
+    CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
+                                            reinterpret_cast<const void**> (&dirs[0]),
+                                            dirs.size(),
+                                            &kCFTypeArrayCallBacks);
+
+    mEventStreamRef = FSEventStreamCreate(nullptr,
+                                          &NativeFileWatcherIOTask::fsevents_callback,
+                                          context,
+                                          PathsToWatch,
+                                          kFSEventStreamEventIdSinceNow,
+                                          3,
+                                          streamFlags);
+    mRunLoop = CFRunLoopGetCurrent();
+    FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
+    // Things to do after we make the stream (Tegan):
+    // 1. Check for error, report if failed.
+    // 2. Make a correct resource descriptor and keep track of it in our hashtables (add, etc).
+    // 3. Make sure callbacks are successfully added for this watch.
+
 
 
     // Check that adding the path to the inotify instance was sucessfull. Report error if not.
-    if (resHandle == -1) {
+    if (!mEventStreamRef) {
         FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
 
         nsresult rv =
-          ReportError(wrappedParameters->mErrorCallbackHandle, NS_ERROR_UNEXPECTED, static_cast<long>(resHandle));
+          ReportError(wrappedParameters->mErrorCallbackHandle, NS_ERROR_UNEXPECTED, (long)(mEventStreamRef));
         if (NS_FAILED(rv)) {
           FILEWATCHERLOG(
             "NativeFileWatcherIOTask::AddPathRunnableMethod - "
@@ -509,7 +538,7 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
     // Initialise the resource descriptor.
     UniquePtr<WatchedResourceDescriptor> resourceDesc(
-                new WatchedResourceDescriptor(wrappedParameters->mPath, resHandle));
+                new WatchedResourceDescriptor(wrappedParameters->mPath));
 
     // Append the callbacks to the hash tables. We do this now since
     // AddDirectoryToWatchList could use the error callback, but we
@@ -523,7 +552,6 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
         // Add the resource pointer to both indexes.
         WatchedResourceDescriptor* resource = resourceDesc.release();
         mWatchedResourcesByPath.Put(wrappedParameters->mPath, resource);
-        mWatchedResourcesByHandle.Put(resHandle, resource); // FIXME: This (the cast to void*) probably won't work, should review.
 
         // Dispatch the success callback.
         nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
@@ -674,7 +702,6 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
 
     // Since there's no callbacks left, let's remove entries from the hash tables.
     mWatchedResourcesByPath.Remove(toRemove->mPath);
-    mWatchedResourcesByHandle.Remove(toRemove->mWatchedResourceDescriptor);
 
     // Dispatch the success callback.
     nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
@@ -697,21 +724,6 @@ nsresult
 NativeFileWatcherIOTask::DeactivateRunnableMethod()
 {
     MOZ_ASSERT(!NS_IsMainThread());
-
-    // Remind users to manually remove the watches before quitting.
-    MOZ_ASSERT(!mWatchedResourcesByHandle.Count(),
-               "Clients of the nsINativeFileWatcher must remove "
-               "watches manually before quitting.");
-
-    //close(mInotifyFileDescriptor);
-
-    // Log any pending watch.
-    for (auto it = mWatchedResourcesByHandle.Iter(); !it.Done(); it.Next()) {
-        FILEWATCHERLOG("NativeFileWatcherIOTask::DeactivateRunnableMethod - "
-                       "%S is still being watched.",
-                       it.UserData()->mPath.get());
-    }
-
     // We return immediately if |mShuttingDown| is true (see below for
     // details about the shutdown protocol being followed).
     if (mShuttingDown) {
@@ -726,9 +738,7 @@ NativeFileWatcherIOTask::DeactivateRunnableMethod()
     // Deactivate all the non-shutdown methods of this object.
     mShuttingDown = true;
 
-    // Remove all the elements from the index. Memory will be freed by
-    // calling Clear() on mWatchedResourcesByPath.
-    mWatchedResourcesByHandle.Clear();
+
 
     // Clear frees the memory associated with each element and clears the table.
     // Since we are using Scoped |int|s, they get automatically closed as well.
