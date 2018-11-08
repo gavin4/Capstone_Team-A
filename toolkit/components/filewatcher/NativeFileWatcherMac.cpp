@@ -330,7 +330,7 @@ NativeFileWatcherIOTask::RunInternal()
 //                char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
 //                ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
 //                ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
-//                ((inotify_event*)inotifyEventBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+//                ((inotify_event*)inotifyEv    entBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
 //                strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->len);
 //                ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
 //                mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
@@ -454,10 +454,10 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
         return NS_ERROR_NULL_POINTER;
     }
 
+    // Convert path to watch to a c-string.
     char* localPath = ToNewCString(wrappedParameters->mPath);
 
-    // Does the path exist? Notify if not. // FIXME: Left off here Saturday trying to get test_watch_resource passing.
-    // We need a correct error condition for this.
+    // Does the path exist? Notify and exit if not.
     if (!access(localPath, F_OK)) {
         FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - File does not exist.");
         return NS_ERROR_FILE_NOT_FOUND;
@@ -481,43 +481,44 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
     context->release = nullptr;
     context->copyDescription = nullptr;
 
-    // Converting from cstring to CFStringRef (Required for CreateStream)
-    CFStringRef pathToAdd = CFStringCreateWithCString(nullptr, localPath, kCFStringEncodingASCII);
+    // Need a vector because the CFArray the stream requires is immutable, so we use this as a temp
+    // structure to build our list of watch paths.
     std::vector<CFStringRef> dirs;
-    dirs.push_back(pathToAdd);
 
-
-
-    // Setting flags for stream creation.
-    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
-
+    // Add the single watch directory that was passed into this method.
+    dirs.push_back(CFStringCreateWithCString(nullptr, localPath, kCFStringEncodingASCII));
+    FSEventStreamEventId streamEventId = kFSEventStreamEventIdSinceNow;
+    // Check if we already have an existing stream. If there is one already, we need to copy the existing watch paths from it
+    // and add to our temp vector of paths before creating the new stream. There's only ever one stream, and they're immutable.
     if (mEventStreamRef) {
             CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
             for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
                dirs.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
             }
+            FSEventStreamStop(mEventStreamRef);
+            streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
+            FSEventStreamInvalidate(mEventStreamRef);
+            FSEventStreamRelease(mEventStreamRef);
+            mEventStreamRef = nullptr;
     }
-    // Creating a CFArray for stream creation
+
+    // Creating an (immutable) list of paths to watch for stream creation from our (mutable) vector.
     CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
                                             reinterpret_cast<const void**> (&dirs[0]),
                                             dirs.size(),
                                             &kCFTypeArrayCallBacks);
 
+    // Setting flags for stream creation.
+    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
+
+    // Create the actual FS Event Stream.
     mEventStreamRef = FSEventStreamCreate(nullptr,
                                           &NativeFileWatcherIOTask::fsevents_callback,
                                           context,
                                           PathsToWatch,
-                                          kFSEventStreamEventIdSinceNow,
+                                          streamEventId,
                                           3,
                                           streamFlags);
-    mRunLoop = CFRunLoopGetCurrent();
-    FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
-    // Things to do after we make the stream (Tegan):
-    // 1. Check for error, report if failed.
-    // 2. Make a correct resource descriptor and keep track of it in our hashtables (add, etc).
-    // 3. Make sure callbacks are successfully added for this watch.
-
-
 
     // Check that adding the path to the inotify instance was sucessfull. Report error if not.
     if (!mEventStreamRef) {
@@ -535,6 +536,11 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
         return NS_ERROR_FAILURE;
     }
+
+    // Get and schedule the FSEvents run loop,
+    mRunLoop = CFRunLoopGetCurrent();
+    FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
+    FSEventStreamStart(mEventStreamRef);
 
     // Initialise the resource descriptor.
     UniquePtr<WatchedResourceDescriptor> resourceDesc(
@@ -640,9 +646,6 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
         return NS_OK;
     }
 
-//    mWatchedResourcesByPath.Put(wrappedParameters->mPath, resource);
-//    mWatchedResourcesByHandle
-
     // Hash table points to an array of callbacks.
     ChangeCallbackArray* changeCallbackArray =
             mChangeCallbacksTable.Get(toRemove->mPath);
@@ -675,6 +678,7 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
                        wrappedParameters->mPath.get());
         MOZ_CRASH();
     }
+
     // If there are still callbacks left, keep the descriptor.
     // We don't check for error callbacks since there's no point in keeping
     // the descriptor if there are no change callbacks but some error callbacks.
@@ -691,9 +695,69 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
         return NS_OK;
     }
 
+    if (!mEventStreamRef) {
+        //If the stream doesn't exist, exit quietly.
+        return NS_OK;
+    }
+
+    std::vector<CFStringRef> dirs;
+
+    const int copyBufferSize = 1024;
+    char* PathtoRemove = ToNewCString(wrappedParameters->mPath);
+    char copyBuffer[copyBufferSize] = {'\0'};
+
+    //If the stream exists, continue...
+    CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
+
+    for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
+        CFStringGetCString((CFStringRef)CFArrayGetValueAtIndex(TempPath,i), copyBuffer, copyBufferSize, kCFStringEncodingASCII);
+
+        // Check to make sure that we don't copy over our path being removed.
+        if(strncmp(PathtoRemove, copyBuffer, copyBufferSize)){
+            dirs.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
+        }
+    }
+
+    FSEventStreamStop(mEventStreamRef);
+    FSEventStreamEventId streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
+    FSEventStreamInvalidate(mEventStreamRef);
+    FSEventStreamRelease(mEventStreamRef);
+
+    //Making stream context for stream creation.
+    auto *context = new FSEventStreamContext();
+    context->version = 0;
+    context->info = this;
+    context->retain = nullptr;
+    context->release = nullptr;
+    context->copyDescription = nullptr;
+
+    // Creating an (immutable) list of paths to watch for stream creation from our (mutable) vector.
+    CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
+                                            reinterpret_cast<const void**> (&dirs[0]),
+                                            dirs.size(),
+                                            &kCFTypeArrayCallBacks);
+
+    // Setting flags for stream creation.
+    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
+
+    // Create the actual FS Event Stream.
+    mEventStreamRef = FSEventStreamCreate(nullptr,
+                                          &NativeFileWatcherIOTask::fsevents_callback,
+                                          context,
+                                          PathsToWatch,
+                                          streamEventId,
+                                          3,
+                                          streamFlags);
+
+    // TODO: We need to restart the stream here.
+    // Get and schedule the FSEvents run loop,
+    mRunLoop = CFRunLoopGetCurrent();
+    FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
+    FSEventStreamStart(mEventStreamRef);
+
     // Removing a watched descriptor from the inotify instance and acting if the removal was a failure
-    int inotifyRemoveStatus = 0; //inotify_rm_watch(mInotifyFileDescriptor, toRemove->mWatchedResourceDescriptor);
-    if(inotifyRemoveStatus == -1){
+    // TODO: Do we need to call error callback here? (See addPathRunnable for same behavior, ln 525.)
+    if(!mEventStreamRef){
         FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
                        "to remove the Watch Descriptor from the inotify instance %S.",
                        wrappedParameters->mPath.get());
@@ -1105,31 +1169,92 @@ void NativeFileWatcherIOTask::fsevents_callback(ConstFSEventStreamRef streamRef,
                                            const FSEventStreamEventId eventIds[])
   {
     /*
-    auto *fse_monitor = static_cast<fsevents_monitor *> (clientCallBackInfo);
+       char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
 
-    if (!fse_monitor)
-    {
-      throw libfsw_exception(_("The callback info cannot be cast to fsevents_monitor."));
-    }
+       // FIXME: We can probably remove this now. Keep for now until sure we can rely on task rescheduling instead of a loop.
+       while (true) {
+           // Sleep to keep thread in suspended state until event occurs. Will return early as soon as an
+           // event occurs (our signal handler is triggered).
+           sleep(0.01);
 
-    // Build the notification objects.
-    std::vector<event> events;
+           // If we've slept for one second (or we returned early due to a file system event), we should check
+           // for events waiting to be read from the file descriptor.
+           if(mEventWaiting){
+               --mEventWaiting; // Decrement an event, since we're acting on one of them.
 
-    time_t curr_time;
-    time(&curr_time);
+               mInotifyReadTimeout = 1000; // Timeout in case while loop runs forever.
+
+               // Here we're going to read all available inotify_events from the file descriptor, since we know an event
+               // occured (due to the increment in our signal handler and the non-zero value of mEventWaiting.
+               //
+               // Since it's a file descriptor with a possibly limited buffer, we'll read all available events as fast as
+               // we can and store safely into a queue for later processing.
+               while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))> 0 && --mInotifyReadTimeout > 0){
+                   char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
+                   ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
+                   ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
+                   ((inotify_event*)inotifyEv    entBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
+                   strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->len);
+                   ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
+                   mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
+
+                   ((inotify_event*)inotifyEventTempBuffer)->cookie = 0;
+                   ((inotify_event*)inotifyEventTempBuffer)->len = 0;
+                   ((inotify_event*)inotifyEventTempBuffer)->mask = 0;
+                   ((inotify_event*)inotifyEventTempBuffer)->name[0] = '\0';
+                   ((inotify_event*)inotifyEventTempBuffer)->wd = 0;
+               }
+
+               // Reset timeout and start processing from our queue of events. Call related callbacks when appropriate.
+               mInotifyReadTimeout = 1000;
+               while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
+                   inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
+
+                   if (inotifyEventToProcess->mask & IN_ALL_EVENTS) {
+                       WatchedResourceDescriptor* changedRes = mWatchedResourcesByHandle.Get(inotifyEventToProcess->wd);
+
+                       nsString resourcePath;
+                       nsString resourceName = NS_ConvertASCIItoUTF16(inotifyEventToProcess->name);
+                       nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
+                       if (NS_SUCCEEDED(rv)) {
+                           rv = DispatchChangeCallbacks(changedRes, resourcePath);
+                           if (NS_FAILED(rv)) {
+                               // Log that we failed to dispatch the change callbacks.
+                               FILEWATCHERLOG(
+                                           "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks(%x).", rv);
+                               return rv;
+                           }
+                       }
+                   }
+
+                   // Delete event now that we've processed it.
+                   delete [] inotifyEventToProcess;
+                   mInotifyEventQueue.pop();
+               }
+           }
+
+           // If we don't have anything left to watch, exit. // FIXME: Should this return ERR to prevent reschedule?
+           // FIXME: Maybe this logic should be moved up into the run() thread and handled before (in-between) thread reschedule?
+           //        This may be true of other logic as well, investigate.
+           if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
+               break;
+           }
+
+           break; // Break and let loop get rescheduled in Run().
+       }
+    */
+
+
+
+    // Build the notification objects
 
     for (size_t i = 0; i < numEvents; ++i)
     {
-      events.emplace_back(((char **) eventPaths)[i],
-                          curr_time,
-                          decode_flags(eventFlags[i]));
+        char* singlePath = ((char**) eventPaths)[i];
+        WatchedResourceDescriptor Resource = mWatchedResourcesByPath.Get(NS_ConvertASCIItoUTF16(singlePath));
+
     }
 
-    if (!events.empty())
-    {
-      fse_monitor->notify_events(events);
-    }
-    */
   }
 
 
