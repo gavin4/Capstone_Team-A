@@ -1,5 +1,5 @@
 ﻿#include "NativeFileWatcherMac.h"
-
+#include "mozilla/Mutex.h"
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
 #include "nsClassHashtable.h"
@@ -191,6 +191,39 @@ struct PathRunnablesParametersWrapper
     {
     }
 };
+/*
+  GroupData {
+    char* eventPath;
+    const FSEventStreamEventFlags eventFlags;
+    const FSEventStreamEventId eventIds;
+}
+
+
+CallbackEvents {
+    vector<GroupData> savedEvents;
+    mozilla::mutex;
+}
+*/
+
+
+struct CallBackAction{
+    CallBackAction(char*eventPath,const FSEventStreamEventFlags eventFlag,const FSEventStreamEventId eventIds)
+        :mEventPath(eventPath)
+        ,mEventFlags(eventFlag)
+        ,mEventIds(eventIds)
+    {}
+    char * mEventPath;
+    const FSEventStreamEventFlags mEventFlags;
+    const FSEventStreamEventId mEventIds;
+};
+
+struct CallBackEvents{
+    CallBackEvents()
+        : callBackLock("filewatcher::eventLock")
+    {}
+    std::vector<CallBackAction> mSavedEvents;
+    Mutex callBackLock;
+};
 
 /**
  * This runnable is dispatched from the main thread to get the notifications of
@@ -244,6 +277,7 @@ private:
 
     FSEventStreamRef mEventStreamRef;
     CFRunLoopRef mRunLoop = nullptr;
+    static CallBackEvents mCallBackEvents;
     static void fsevents_callback(ConstFSEventStreamRef streamRef,
                                                void *clientCallBackInfo,
                                                size_t numEvents,
@@ -296,6 +330,8 @@ private:
                               nsAString& nativeResourcePath);
 };
 
+CallBackEvents NativeFileWatcherIOTask::mCallBackEvents;
+
 /**
  * The watching thread logic.
  *
@@ -305,80 +341,30 @@ private:
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-//    int mInotifyReadTimeout;
-//    char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
+    sleep(0.01);
+    mCallBackEvents.callBackLock.Lock();
 
-//    // FIXME: We can probably remove this now. Keep for now until sure we can rely on task rescheduling instead of a loop.
-//    while (true) {
-//        // Sleep to keep thread in suspended state until event occurs. Will return early as soon as an
-//        // event occurs (our signal handler is triggered).
-//        sleep(0.01);
+    //If there are no callBack events to handle we release the lock and return.
+    if (mCallBackEvents.mSavedEvents.empty()){
+        mCallBackEvents.callBackLock.Unlock();
+        return NS_OK;
+    }
 
-//        // If we've slept for one second (or we returned early due to a file system event), we should check
-//        // for events waiting to be read from the file descriptor.
-//        if(mEventWaiting){
-//            --mEventWaiting; // Decrement an event, since we're acting on one of them.
+    for(int i = 0; i < mCallBackEvents.mSavedEvents.size(); i++) {
+        CallBackAction eventToHandle = mCallBackEvents.mSavedEvents[i];
+        nsString resourcePath = NS_ConvertASCIItoUTF16(eventToHandle.mEventPath);
+        WatchedResourceDescriptor* changedRes = mWatchedResourcesByPath.Get(resourcePath);
 
-//            mInotifyReadTimeout = 1000; // Timeout in case while loop runs forever.
+        nsresult rv = DispatchChangeCallbacks(changedRes, resourcePath);
+        if (NS_FAILED(rv)) {
+            // Log that we failed to dispatch the change callbacks.
+            FILEWATCHERLOG(
+                        "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks(%x).", rv);
+            return rv;
+        }
+    }
 
-//            // Here we're going to read all available inotify_events from the file descriptor, since we know an event
-//            // occured (due to the increment in our signal handler and the non-zero value of mEventWaiting.
-//            //
-//            // Since it's a file descriptor with a possibly limited buffer, we'll read all available events as fast as
-//            // we can and store safely into a queue for later processing.
-//            while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))> 0 && --mInotifyReadTimeout > 0){
-//                char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
-//                ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
-//                ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
-//                ((inotify_event*)inotifyEv    entBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-//                strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->len);
-//                ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
-//                mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
-
-//                ((inotify_event*)inotifyEventTempBuffer)->cookie = 0;
-//                ((inotify_event*)inotifyEventTempBuffer)->len = 0;
-//                ((inotify_event*)inotifyEventTempBuffer)->mask = 0;
-//                ((inotify_event*)inotifyEventTempBuffer)->name[0] = '\0';
-//                ((inotify_event*)inotifyEventTempBuffer)->wd = 0;
-//            }
-
-//            // Reset timeout and start processing from our queue of events. Call related callbacks when appropriate.
-//            mInotifyReadTimeout = 1000;
-//            while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
-//                inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
-
-//                if (inotifyEventToProcess->mask & IN_ALL_EVENTS) {
-//                    WatchedResourceDescriptor* changedRes = mWatchedResourcesByHandle.Get(inotifyEventToProcess->wd);
-
-//                    nsString resourcePath;
-//                    nsString resourceName = NS_ConvertASCIItoUTF16(inotifyEventToProcess->name);
-//                    nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
-//                    if (NS_SUCCEEDED(rv)) {
-//                        rv = DispatchChangeCallbacks(changedRes, resourcePath);
-//                        if (NS_FAILED(rv)) {
-//                            // Log that we failed to dispatch the change callbacks.
-//                            FILEWATCHERLOG(
-//                                        "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks(%x).", rv);
-//                            return rv;
-//                        }
-//                    }
-//                }
-
-//                // Delete event now that we've processed it.
-//                delete [] inotifyEventToProcess;
-//                mInotifyEventQueue.pop();
-//            }
-//        }
-
-//        // If we don't have anything left to watch, exit. // FIXME: Should this return ERR to prevent reschedule?
-//        // FIXME: Maybe this logic should be moved up into the run() thread and handled before (in-between) thread reschedule?
-//        //        This may be true of other logic as well, investigate.
-//        if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
-//            break;
-//        }
-
-//        break; // Break and let loop get rescheduled in Run().
-//    }
+    mCallBackEvents.callBackLock.Unlock();
 
     return NS_OK;
 }
@@ -414,9 +400,8 @@ NativeFileWatcherIOTask::Run()
     }
 
     // No error occurred, reschedule. // FIXME: this is fucked? Maybe not.
-    //return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh.
+    return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh.
                                              // *** SO WE'RE RE-SCHEDULING AS PART OF NORMAL OPERATION. <<<<<
-    return NS_OK;
 }
 
 /**
@@ -845,12 +830,12 @@ NativeFileWatcherIOTask::DispatchChangeCallbacks(
     // This should always be valid.
     MOZ_ASSERT(changeCallbackArray);
 
-//    for (size_t i = 0; i < changeCallbackArray->Length(); i++) {
-//        nsresult rv = ReportChange((*changeCallbackArray)[i], aChangedResource);
-//        if (NS_FAILED(rv)) {
-//            return rv;
-//        }
-//    }
+    for (size_t i = 0; i < changeCallbackArray->Length(); i++) {
+        nsresult rv = ReportChange((*changeCallbackArray)[i], aChangedResource);
+        if (NS_FAILED(rv)) {
+            return rv;
+        }
+    }
 
     return NS_OK;
 }
@@ -1167,95 +1152,17 @@ void NativeFileWatcherIOTask::fsevents_callback(ConstFSEventStreamRef streamRef,
                                            void *eventPaths,
                                            const FSEventStreamEventFlags eventFlags[],
                                            const FSEventStreamEventId eventIds[])
-  {
-    /*
-       char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
-
-       // FIXME: We can probably remove this now. Keep for now until sure we can rely on task rescheduling instead of a loop.
-       while (true) {
-           // Sleep to keep thread in suspended state until event occurs. Will return early as soon as an
-           // event occurs (our signal handler is triggered).
-           sleep(0.01);
-
-           // If we've slept for one second (or we returned early due to a file system event), we should check
-           // for events waiting to be read from the file descriptor.
-           if(mEventWaiting){
-               --mEventWaiting; // Decrement an event, since we're acting on one of them.
-
-               mInotifyReadTimeout = 1000; // Timeout in case while loop runs forever.
-
-               // Here we're going to read all available inotify_events from the file descriptor, since we know an event
-               // occured (due to the increment in our signal handler and the non-zero value of mEventWaiting.
-               //
-               // Since it's a file descriptor with a possibly limited buffer, we'll read all available events as fast as
-               // we can and store safely into a queue for later processing.
-               while(read(mInotifyFileDescriptor,inotifyEventTempBuffer,sizeof(inotifyEventTempBuffer))> 0 && --mInotifyReadTimeout > 0){
-                   char* inotifyEventBuffer = new char[sizeof(struct inotify_event __attribute__ ((aligned(8)))) + NAME_MAX + 1];
-                   ((inotify_event*)inotifyEventBuffer)->cookie = ((inotify_event*)inotifyEventTempBuffer)->cookie;
-                   ((inotify_event*)inotifyEventBuffer)->len = ((inotify_event*)inotifyEventTempBuffer)->len;
-                   ((inotify_event*)inotifyEv    entBuffer)->mask = ((inotify_event*)inotifyEventTempBuffer)->mask;
-                   strncpy(((inotify_event*)inotifyEventBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->name, ((inotify_event*)inotifyEventTempBuffer)->len);
-                   ((inotify_event*)inotifyEventBuffer)->wd = ((inotify_event*)inotifyEventTempBuffer)->wd;
-                   mInotifyEventQueue.push((inotify_event*)inotifyEventBuffer);
-
-                   ((inotify_event*)inotifyEventTempBuffer)->cookie = 0;
-                   ((inotify_event*)inotifyEventTempBuffer)->len = 0;
-                   ((inotify_event*)inotifyEventTempBuffer)->mask = 0;
-                   ((inotify_event*)inotifyEventTempBuffer)->name[0] = '\0';
-                   ((inotify_event*)inotifyEventTempBuffer)->wd = 0;
-               }
-
-               // Reset timeout and start processing from our queue of events. Call related callbacks when appropriate.
-               mInotifyReadTimeout = 1000;
-               while (!mInotifyEventQueue.empty() && --mInotifyReadTimeout > 0) {
-                   inotify_event* inotifyEventToProcess = mInotifyEventQueue.front();
-
-                   if (inotifyEventToProcess->mask & IN_ALL_EVENTS) {
-                       WatchedResourceDescriptor* changedRes = mWatchedResourcesByHandle.Get(inotifyEventToProcess->wd);
-
-                       nsString resourcePath;
-                       nsString resourceName = NS_ConvertASCIItoUTF16(inotifyEventToProcess->name);
-                       nsresult rv = MakeResourcePath(changedRes, resourceName, resourcePath);
-                       if (NS_SUCCEEDED(rv)) {
-                           rv = DispatchChangeCallbacks(changedRes, resourcePath);
-                           if (NS_FAILED(rv)) {
-                               // Log that we failed to dispatch the change callbacks.
-                               FILEWATCHERLOG(
-                                           "NativeFileWatcherIOTask::Run - Failed to dispatch change callbacks(%x).", rv);
-                               return rv;
-                           }
-                       }
-                   }
-
-                   // Delete event now that we've processed it.
-                   delete [] inotifyEventToProcess;
-                   mInotifyEventQueue.pop();
-               }
-           }
-
-           // If we don't have anything left to watch, exit. // FIXME: Should this return ERR to prevent reschedule?
-           // FIXME: Maybe this logic should be moved up into the run() thread and handled before (in-between) thread reschedule?
-           //        This may be true of other logic as well, investigate.
-           if(mWatchedResourcesByHandle.Count() == 0 && mWatchedResourcesByPath.Count() == 0) {
-               break;
-           }
-
-           break; // Break and let loop get rescheduled in Run().
-       }
-    */
-
-
+{
+    MutexAutoLock callBackAutoLock(mCallBackEvents.callBackLock);
 
     // Build the notification objects
-
     for (size_t i = 0; i < numEvents; ++i)
     {
         char* singlePath = ((char**) eventPaths)[i];
-        WatchedResourceDescriptor Resource = mWatchedResourcesByPath.Get(NS_ConvertASCIItoUTF16(singlePath));
-
+        CallBackAction callBackAction(singlePath,eventFlags[i],eventIds[i]);
+        mCallBackEvents.mSavedEvents.push_back(callBackAction);
     }
-
-  }
+}
 
 
 } // namespace
@@ -1271,7 +1178,7 @@ NativeFileWatcherService::NativeFileWatcherService() {}
 NativeFileWatcherService::~NativeFileWatcherService() {}
 
 void
-NativeFileWatcherService::signalHandler(int signal)
+NativeFileWatcherService::signalHandler(int signal) // FIXME: DELETE THIS
 {
 //    if(signal == SIGIO) {
 //        ++mEventWaiting;
