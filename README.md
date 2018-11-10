@@ -11,6 +11,16 @@ For meeting notes and project progress, please reference [the wiki, located here
 * The new ports will support Mac os following the "High Sierra" (Mac os 10.13) and beyond due to the inclusion of the APFS(Apple File System). Linux will aslo be supported.
 
 
+## Linux Filewatcher
+
+**All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherLNX.cpp` and `NativeFileWatcherLNX.h`.
+
+* The liniux filewatcher currently uses `inotify` as its event handler ot get systems level signals from the linux kernel. If you want more information on inotify please look at the [Inotify Man Page](http://man7.org/linux/man-pages/man7/inotify.7.html).  
+* This implementation diverges from the windows version by excluding the implementation of completion ports and instead deciding to use file and watch descriptors to track watched files.
+
+## MacOS Filewatcher
+**All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherMac.cpp` and `NativeFileWatcherMac.h`.
+
 ## Compiling
 
 * If you are not familiar with how to build firefox locally, please visit this website: [Building Firefox](https://developer.mozilla.org/en-US/docs/Mozilla/Developer_guide/Build_Instructions/Simple_Firefox_build).
