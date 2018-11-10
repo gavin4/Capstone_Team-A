@@ -12,14 +12,13 @@ For meeting notes and project progress, please reference [the wiki, located here
 
 
 ## Linux Filewatcher
-
-**All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherLNX.cpp` and `NativeFileWatcherLNX.h`.
+** All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherLNX.cpp` and `NativeFileWatcherLNX.h`.
 
 * The liniux filewatcher currently uses `inotify` as its event handler ot get systems level signals from the linux kernel. If you want more information on inotify please look at the [Inotify Man Page](http://man7.org/linux/man-pages/man7/inotify.7.html).  
 * This implementation diverges from the windows version by excluding the implementation of completion ports and instead deciding to use file and watch descriptors to track watched files.
 
 ## MacOS Filewatcher
-**All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherMac.cpp` and `NativeFileWatcherMac.h`.
+** All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherMac.cpp` and `NativeFileWatcherMac.h`.
 
 ## Compiling
 
