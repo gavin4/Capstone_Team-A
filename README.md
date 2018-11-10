@@ -18,7 +18,7 @@ For meeting notes and project progress, please reference [the wiki, located here
 * This implementation diverges from the windows version by excluding the implementation of completion ports and instead deciding to use file and watch descriptors to track watched files.
 
 ## MacOS Filewatcher
-** All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherMac.cpp` and `NativeFileWatcherMac.h`.**
+**All chnages for the linux filewatcher can be reflected in `Toolkit/Components/FileWatcher`. An implementation can be found in `NativeFileWatcherMac.cpp` and `NativeFileWatcherMac.h`**.
 
 * The liniux filewatcher currently uses `inotify` as its event handler ot get systems level signals from the linux kernel. If you want more information on inotify please look at the [FSEvents API Docs](https://developer.apple.com/library/archive/documentation/Darwin/Conceptual/FSEvents_ProgGuide/UsingtheFSEventsFramework/UsingtheFSEventsFramework.html#//apple_ref/doc/uid/TP40005289-CH4-SW4).  
 * This implementation diverges from the windows version by excluding the implementation of completion ports and instead deciding to use file and watch descriptors to track watched files.
