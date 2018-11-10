@@ -27,7 +27,6 @@ public:
 private:
   // Filewatcher IO thread for back-end inotify work.
   nsCOMPtr<nsIThread> mIOThread;
-
   // The instance of the runnable dealing with the I/O.
   nsCOMPtr<nsIRunnable> mWorkerIORunnable;
 
