@@ -32,39 +32,32 @@ namespace mozilla {
 namespace moz_filewatcher {
 
 
+
+
+
 class NativeFileWatcherFSETask;
 CallBackEvents* NativeFileWatcherFSETask::cbe_internal;
 
-NS_IMETHODIMP
-NativeFileWatcherFSETask::Run()
+NativeFileWatcherFSETask::NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent,
+                                                            CallBackEvents* cbe,
+                                                            std::vector<CFStringRef>& dirs)
+    : Runnable("NativeFileWatcherFSETask")
+    , mParent(parent)
+    , runLoopLock("run loop lock")
 {
-    MOZ_ASSERT(!NS_IsMainThread());
+    // move this to CPP file and set up stream here
+    for(int i(0); i < dirs.size(); i++) {
+        mDirs.push_back(dirs[i]);
+    }
+
+    cbe_internal = cbe;
+
+    runLoopLock.Lock();
 
     //Making stream context for stream creation.
-    auto *context = new FSEventStreamContext();/*
-    context->version = 0;
-    context->info = this;
-    context->retain = nullptr;
-    context->release = nullptr;
-    context->copyDescription = nullptr;*/
+    auto *context = new FSEventStreamContext();
 
     FSEventStreamEventId streamEventId = kFSEventStreamEventIdSinceNow;
-
-    /*
-    // Check if we already have an existing stream. If there is one already, we need to copy the existing watch paths from it
-    // and add to our temp vector of paths before creating the new stream. There's only ever one stream, and they're immutable.
-//    if (mEventStreamRef) {
-//            CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
-//            for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
-//               mDirs.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
-//            }
-//            FSEventStreamStop(mEventStreamRef);
-//            streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
-//            FSEventStreamInvalidate(mEventStreamRef);
-//            FSEventStreamRelease(mEventStreamRef);
-//            mEventStreamRef = nullptr;
-//    }
-*/
 
     // Creating an (immutable) list of paths to watch for stream creation from our (mutable) vector.
     CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
@@ -83,6 +76,106 @@ NativeFileWatcherFSETask::Run()
                                           streamEventId,
                                           (CFAbsoluteTime)3.0,
                                           streamFlags);
+}
+
+NS_IMETHODIMP
+NativeFileWatcherFSETask::RemovePath(char* pathToRemove)
+{
+    runLoopLock.Lock();
+
+    std::vector<CFStringRef> newPaths = GetCurrentStreamPaths(pathToRemove);
+    if(newPaths.empty())
+    {
+       FSEventStreamStop(mEventStreamRef);
+       FSEventStreamInvalidate(mEventStreamRef);
+       FSEventStreamRelease(mEventStreamRef);
+
+       runLoopLock.Unlock();
+
+       return NS_OK;
+    }
+
+    CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
+                                            reinterpret_cast<const void**> (&newPaths[0]),
+                                            newPaths.size(),
+                                            &kCFTypeArrayCallBacks);
+    FSEventStreamStop(mEventStreamRef);
+    FSEventStreamEventId streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
+    FSEventStreamInvalidate(mEventStreamRef);
+    FSEventStreamRelease(mEventStreamRef);
+
+    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
+    auto *context = new FSEventStreamContext();
+
+    // Create the actual FS Event Stream.
+    mEventStreamRef = FSEventStreamCreate(nullptr,
+                                          &NativeFileWatcherFSETask::fsevents_callback,
+                                          context,
+                                          PathsToWatch,
+                                          streamEventId,
+                                          (CFAbsoluteTime)3.0,
+                                          streamFlags);
+
+    return NS_DispatchToCurrentThread(this);
+}
+
+NS_IMETHODIMP
+NativeFileWatcherFSETask::AddPath(char* pathToAdd)
+{
+    runLoopLock.Lock();
+
+    std::vector<CFStringRef> newPaths = GetCurrentStreamPaths();
+    newPaths.push_back(CFStringCreateWithCString(nullptr, pathToAdd, kCFStringEncodingASCII));
+    CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
+                                            reinterpret_cast<const void**> (&newPaths[0]),
+                                            newPaths.size(),
+                                            &kCFTypeArrayCallBacks);
+    FSEventStreamStop(mEventStreamRef);
+    FSEventStreamEventId streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
+    FSEventStreamInvalidate(mEventStreamRef);
+    FSEventStreamRelease(mEventStreamRef);
+
+    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
+    auto *context = new FSEventStreamContext();
+
+    // Create the actual FS Event Stream.
+    mEventStreamRef = FSEventStreamCreate(nullptr,
+                                          &NativeFileWatcherFSETask::fsevents_callback,
+                                          context,
+                                          PathsToWatch,
+                                          streamEventId,
+                                          (CFAbsoluteTime)3.0,
+                                          streamFlags);
+
+    return NS_DispatchToCurrentThread(this);
+}
+
+std::vector<CFStringRef>
+NativeFileWatcherFSETask::GetCurrentStreamPaths(char* skip)
+{
+    std::vector<CFStringRef> toReturn;
+    CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
+    for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
+
+        std::cout << "We're comparing: \n"
+                  << CFStringGetCStringPtr(CFStringCreateWithCString(nullptr, skip, kCFStringEncodingASCII), kCFStringEncodingASCII)
+                  << "\nwith:\n"
+                  << CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(TempPath,i), kCFStringEncodingASCII) << std::endl;
+
+        if(!CFEqual(CFStringCreateWithCString(nullptr, skip, kCFStringEncodingASCII), CFArrayGetValueAtIndex(TempPath,i)))
+        {
+            //continue;
+            toReturn.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
+            std::cout << "Adding " << toReturn.back() << " to toReturn.\n";
+        }
+    }
+    return toReturn;
+}
+
+NS_IMETHODIMP
+NativeFileWatcherFSETask::Run()
+{
+    MOZ_ASSERT(!NS_IsMainThread());
 
     // Get and schedule the FSEvents run loop,
     mRunLoop = CFRunLoopGetCurrent();
@@ -91,6 +184,8 @@ NativeFileWatcherFSETask::Run()
 
     FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
     FSEventStreamStart(mEventStreamRef);
+
+    runLoopLock.Unlock();
 
     CFRunLoopRun();
 
@@ -344,6 +439,20 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
             FILEWATCHERLOG("NativeFileWatcherFSETask::Init - Unable to create and dispatch the workerthread (%x).", fsResult);
             return fsResult;
         }
+    }else
+    {
+        CFRunLoopStop(childRunLoop);
+        // Since this function does a bit of I/O stuff , run it in the IO thread.
+        nsresult rv = mFSEThread->Dispatch(
+                    NewRunnableMethod<char*>(
+                        "NativeFileWatcherFSETask::AddPath",
+                        static_cast<moz_filewatcher::NativeFileWatcherFSETask*>(mWorkerFSERunnable.get()),
+                        &moz_filewatcher::NativeFileWatcherFSETask::AddPath,
+                        localPath),
+                    nsIEventTarget::DISPATCH_NORMAL);
+        if (NS_FAILED(rv)) {
+            return rv;
+        }
     }
 
     // Initialise the resource descriptor.
@@ -424,10 +533,6 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
     nsAutoPtr<PathRunnablesParametersWrapper> wrappedParameters(
                 aWrappedParameters);
 
-    CFRunLoopStop(childRunLoop);
-    nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
-                                wrappedParameters->mPath);
-/*
 
     // We return immediately if |mShuttingDown| is true (see below for
     // details about the shutdown protocol being followed).
@@ -504,80 +609,26 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
         return NS_OK;
     }
 
-    if (!mEventStreamRef) {
-        //If the stream doesn't exist, exit quietly.
-        return NS_OK;
-    }
-
-    std::vector<CFStringRef> dirs;
-
-    const int copyBufferSize = 1024;
     char* PathtoRemove = ToNewCString(wrappedParameters->mPath);
-    char copyBuffer[copyBufferSize] = {'\0'};
 
-    //If the stream exists, continue...
-    CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
-
-    for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
-        CFStringGetCString((CFStringRef)CFArrayGetValueAtIndex(TempPath,i), copyBuffer, copyBufferSize, kCFStringEncodingASCII);
-
-        // Check to make sure that we don't copy over our path being removed.
-        if(strncmp(PathtoRemove, copyBuffer, copyBufferSize)){
-            dirs.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
-        }
-    }
-
-    FSEventStreamStop(mEventStreamRef);
-    FSEventStreamEventId streamEventId = FSEventStreamGetLatestEventId(mEventStreamRef);
-    FSEventStreamInvalidate(mEventStreamRef);
-    FSEventStreamRelease(mEventStreamRef);
-
-    //Making stream context for stream creation.
-    auto *context = new FSEventStreamContext();
-    context->version = 0;
-    context->info = this;
-    context->retain = nullptr;
-    context->release = nullptr;
-    context->copyDescription = nullptr;
-
-    // Creating an (immutable) list of paths to watch for stream creation from our (mutable) vector.
-    CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
-                                            reinterpret_cast<const void**> (&dirs[0]),
-                                            dirs.size(),
-                                            &kCFTypeArrayCallBacks);
-
-    // Setting flags for stream creation.
-    FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
-
-    // Create the actual FS Event Stream.
-    mEventStreamRef = FSEventStreamCreate(nullptr,
-                                          &NativeFileWatcherIOTask::fsevents_callback,
-                                          context,
-                                          PathsToWatch,
-                                          streamEventId,
-                                          3,
-                                          streamFlags);
-
-    // TODO: We need to restart the stream here.
-    // Get and schedule the FSEvents run loop,
-    mRunLoop = CFRunLoopGetCurrent();
-    FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
-    FSEventStreamStart(mEventStreamRef);
-
-    // Removing a watched descriptor from the inotify instance and acting if the removal was a failure
-    // TODO: Do we need to call error callback here? (See addPathRunnable for same behavior, ln 525.)
-    if(!mEventStreamRef){
-        FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - Unable "
-                       "to remove the Watch Descriptor from the inotify instance %S.",
-                       wrappedParameters->mPath.get());
-        return NS_ERROR_ABORT;
+    CFRunLoopStop(childRunLoop);
+    // Since this function does a bit of I/O stuff , run it in the IO thread.
+    nsresult rv = mFSEThread->Dispatch(
+                NewRunnableMethod<char*>(
+                    "NativeFileWatcherFSETask::RemovePath",
+                    static_cast<moz_filewatcher::NativeFileWatcherFSETask*>(mWorkerFSERunnable.get()),
+                    &moz_filewatcher::NativeFileWatcherFSETask::RemovePath,
+                    PathtoRemove),
+                nsIEventTarget::DISPATCH_NORMAL);
+    if (NS_FAILED(rv)) {
+        return rv;
     }
 
     // Since there's no callbacks left, let's remove entries from the hash tables.
     mWatchedResourcesByPath.Remove(toRemove->mPath);
 
     // Dispatch the success callback.
-    nsresult rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
+    rv = ReportSuccess(wrappedParameters->mSuccessCallbackHandle,
                                 wrappedParameters->mPath);
     if (NS_FAILED(rv)) {
         FILEWATCHERLOG("NativeFileWatcherIOTask::RemovePathRunnableMethod - "
@@ -585,7 +636,7 @@ NativeFileWatcherIOTask::RemovePathRunnableMethod(
                        rv);
         return rv;
     }
-*/
+
     return NS_OK;
 }
 
