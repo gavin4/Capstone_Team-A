@@ -16,7 +16,7 @@ function run_test() {
  * Test the watcher correctly notifies of a file creation when watching
  * a single path.
  */
-add_task(async function test_watch_single_path_file_creation() {
+add_task(async function test_capstone() {
 
   // Create and watch a sub-directory of the profile directory so we don't
   // catch notifications we're not interested in (i.e. "startupCache").
@@ -27,27 +27,32 @@ add_task(async function test_watch_single_path_file_creation() {
 
   // Instantiate and initialize the native watcher.
   let watcher = makeWatcher();
-/*
-    let deferred = Promise.defer();
+
+  let deferred = Promise.defer();
 
   let tmpFilePath = OS.Path.join(watchedDir, tempFileName);
+    print("*** -2");
 
   // Add the profile directory to the watch list and wait for the file watcher
   // to start watching.
   await promiseAddPath(watcher, watchedDir, deferred.resolve, deferred.reject);
+    print("*** -1");
 
   // create the file within the watched directory.
   await OS.File.writeAtomic(tmpFilePath, "some data");
+    print("*** 0");
 
   // Wait until the watcher informs us that the file was created.
   let changed = await deferred.promise;
+
   Assert.equal(changed, tmpFilePath);
 
+    print("*** 1");
   // Remove the watch and free the associated memory (we need to
   // reuse 'deferred.resolve' and 'deferred.reject' to unregister).
   await promiseRemovePath(watcher, watchedDir, deferred.resolve, deferred.reject);
-*/
+print("*** 2");
   // Remove the test directory and all of its content.
   await OS.File.removeDir(watchedDir);
-
+print("*** 3");
 });

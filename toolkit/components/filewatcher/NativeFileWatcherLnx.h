@@ -9,34 +9,37 @@
 
 namespace mozilla {
 
-    class NativeFileWatcherService final : public nsINativeFileWatcherService,
-		public nsIObserver
-	{
-	public:
-		NS_DECL_ISUPPORTS
-		NS_DECL_NSINATIVEFILEWATCHERSERVICE
-		NS_DECL_NSIOBSERVER
+class NativeFileWatcherService final
+  : public nsINativeFileWatcherService
+  , public nsIObserver
+{
+public:
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSINATIVEFILEWATCHERSERVICE
+  NS_DECL_NSIOBSERVER
 
-        NativeFileWatcherService();
+  NativeFileWatcherService();
 
-		nsresult Init();
+  nsresult Init();
 
-	private:
-		//need thing that allows access to file watching here
-		nsCOMPtr<nsIThread> mIOThread;
+private:
+  // Filewatcher IO thread for back-end inotify work.
+  nsCOMPtr<nsIThread> mIOThread;
 
-		// The instance of the runnable dealing with the I/O.
-		nsCOMPtr<nsIRunnable> mWorkerIORunnable;
+  // The instance of the runnable dealing with the I/O.
+  nsCOMPtr<nsIRunnable> mWorkerIORunnable;
 
+  static void signalHandler(int signal);
 
-		nsresult Uninit();
-		void WakeUpWorkerThread();
+  nsresult Uninit();
+  void WakeUpWorkerThread();
 
-		// Make the dtor private to make this object only deleted via its ::Release() method.
-        ~NativeFileWatcherService();
-        NativeFileWatcherService(const NativeFileWatcherService& other) = delete;
-        void operator=(const NativeFileWatcherService& other) = delete;
-	};
+  // Make the dtor private to make this object only deleted via its ::Release()
+  // method.
+  ~NativeFileWatcherService();
+  NativeFileWatcherService(const NativeFileWatcherService& other) = delete;
+  void operator=(const NativeFileWatcherService& other) = delete;
+};
 
 } // namespace mozilla
 
