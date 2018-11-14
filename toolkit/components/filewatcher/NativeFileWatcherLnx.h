@@ -32,7 +32,6 @@ private:
   static void signalHandler(int signal);
 
   nsresult Uninit();
-  void WakeUpWorkerThread();
 
   // Make the dtor private to make this object only deleted via its ::Release()
   // method.

@@ -1,3 +1,6 @@
+// A file holding common structures from all filewatchers.
+
+
 #ifndef NATIVEFILEWATCHERCOMMONS_H
 #define NATIVEFILEWATCHERCOMMONS_H
 
@@ -24,11 +27,13 @@ namespace mozilla {
 typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>> ChangeCallbackArray;
 typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>> ErrorCallbackArray;
 
-
+// Filewatcher log module.
 static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
 #define FILEWATCHERLOG(...)                                                    \
     MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
+
+// Filewatcher specific namespace (replaces old anonymous namespaces).
 namespace moz_filewatcher {
 
 /**
@@ -171,7 +176,6 @@ struct PathRunnablesParametersWrapper
     {
     }
 };
-
 
 }
 
