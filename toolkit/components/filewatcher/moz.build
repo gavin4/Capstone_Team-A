@@ -10,7 +10,6 @@ with Files('**'):
 XPCSHELL_TESTS_MANIFESTS += ['tests/xpcshell/xpcshell.ini']
 
 EXPORTS += ['NativeFileWatcherCommons.h']
-EXPORTS += ['NativeFileWatcherIOTask.h']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     EXPORTS += ['NativeFileWatcherWin.h']
@@ -24,7 +23,6 @@ elif CONFIG['OS_TARGET'] == 'Linux':
     ]
 elif CONFIG['OS_TARGET'] == 'Darwin':
     EXPORTS += ['NativeFileWatcherMac.h']
-    EXPORTS += ['NativeFileWatcherFSETask.h']
     UNIFIED_SOURCES += [
         'NativeFileWatcherMac.cpp',
     ]
