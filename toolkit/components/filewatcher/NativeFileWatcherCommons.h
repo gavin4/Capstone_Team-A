@@ -20,6 +20,15 @@
 
 namespace mozilla {
 
+// Define these callback array types to make the code easier to read.
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>> ChangeCallbackArray;
+typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>> ErrorCallbackArray;
+
+
+static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
+#define FILEWATCHERLOG(...)                                                    \
+    MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
+
 namespace moz_filewatcher {
 
 /**
@@ -136,30 +145,6 @@ public:
 private:
     nsMainThreadPtrHandle<nsINativeFileWatcherCallback> mOnChange;
     nsString mChangedResource;
-};
-
-
-// Define these callback array types to make the code easier to read.
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherCallback>> ChangeCallbackArray;
-typedef nsTArray<nsMainThreadPtrHandle<nsINativeFileWatcherErrorCallback>> ErrorCallbackArray;
-
-
-static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
-#define FILEWATCHERLOG(...)                                                    \
-    MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
-
-
-/**
- * A structure to hold the information about a single inotify watch descriptor.
- */
-struct WatchedResourceDescriptor
-{
-    // The path on the file system of the watched resource.
-    nsString mPath;
-    WatchedResourceDescriptor(const nsAString& aPath)
-        : mPath(aPath)
-    {
-    }
 };
 
 /**

@@ -17,6 +17,19 @@ namespace moz_filewatcher {
 
 class NativeFileWatcherIOTask;
 
+/**
+ * A structure to hold the information about a single inotify watch descriptor.
+ */
+struct WatchedResourceDescriptor
+{
+    // The path on the file system of the watched resource.
+    nsString mPath;
+    WatchedResourceDescriptor(const nsAString& aPath)
+        : mPath(aPath)
+    {
+    }
+};
+
 struct CallBackAction{
     CallBackAction(char*eventPath, const FSEventStreamEventFlags eventFlag, const FSEventStreamEventId eventIds)
         : mEventFlags(eventFlag)
