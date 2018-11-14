@@ -456,7 +456,7 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
     // Does the path exist? Notify if not. // FIXME: Left off here Saturday trying to get test_watch_resource passing.
     // We need a correct error condition for this.
-    if (!access(localPath, F_OK)) {
+    if (access(localPath, F_OK)) {
         FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - File does not exist.");
         return NS_ERROR_FILE_NOT_FOUND;
     }

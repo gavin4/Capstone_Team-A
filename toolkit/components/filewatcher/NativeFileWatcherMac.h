@@ -10,7 +10,31 @@
 #include "NativeFileWatcherIOTask.h"
 #include "NativeFileWatcherFSETask.h"
 
+#include <CoreServices/CoreServices.h>
+#include <CoreServices/Components.k.h>
+
 namespace mozilla {
+
+struct CallBackAction{
+    CallBackAction(char*eventPath, const FSEventStreamEventFlags eventFlag, const FSEventStreamEventId eventIds)
+        : mEventFlags(eventFlag)
+        , mEventIds(eventIds)
+    {
+        snprintf(mEventPath, 2048, "%s", eventPath);
+    }
+
+    char mEventPath[2048]; // FIXME: find max path length
+    const FSEventStreamEventFlags mEventFlags;
+    const FSEventStreamEventId mEventIds;
+};
+
+struct CallBackEvents{
+    CallBackEvents()
+        : callBackLock("filewatcher::eventLock")
+    {}
+    std::queue<CallBackAction> mSavedEvents;
+    Mutex callBackLock;
+};
 
 class NativeFileWatcherService final
   : public nsINativeFileWatcherService
