@@ -1,7 +1,5 @@
 ﻿#include "NativeFileWatcherMac.h"
-#include "NativeFileWatcherIOTask.h"
-#include "NativeFileWatcherFSETask.h"
-#include "NativeFileWatcherCommons.h"
+
 #include "mozilla/Mutex.h"
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
@@ -25,7 +23,6 @@
 
 #include <iostream>
 
-#include <CoreServices/Components.k.h>
 
 namespace mozilla {
 

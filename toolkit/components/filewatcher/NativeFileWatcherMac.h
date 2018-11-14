@@ -1,12 +1,14 @@
 #ifndef mozilla_nativefilewatcher_h__
 #define mozilla_nativefilewatcher_h__
 
-#include "nsINativeFileWatcher.h"
 #include "nsIObserver.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsThreadUtils.h"
-#include <CoreServices/CoreServices.h>
+
+#include "NativeFileWatcherCommons.h"
+#include "NativeFileWatcherIOTask.h"
+#include "NativeFileWatcherFSETask.h"
 
 namespace mozilla {
 

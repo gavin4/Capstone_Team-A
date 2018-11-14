@@ -38,7 +38,7 @@
 #include "mozilla/ExtensionPolicyService.h"
 
 #include "nsSessionStoreUtils.h"
-
+#include "NativeFileWatcherCommons.h"
 #if defined(XP_WIN)
 #include "NativeFileWatcherWin.h"
 #elif defined (XP_LINUX)
