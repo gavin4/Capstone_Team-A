@@ -1,30 +1,23 @@
 ﻿#include "NativeFileWatcherMac.h"
-
 #include "NativeFileWatcherCommons.h"
+
 #include "mozilla/Mutex.h"
 #include "mozilla/Services.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/Logging.h"
+#include "mozilla/Scoped.h"
 #include "nsClassHashtable.h"
 #include "nsDataHashtable.h"
 #include "nsIFile.h"
 #include "nsIObserverService.h"
 #include "nsProxyRelease.h"
 #include "nsTArray.h"
-#include "mozilla/Logging.h"
-#include "mozilla/Scoped.h"
 
 #include <unistd.h>
 #include <fcntl.h>
-#include <csignal>
 #include <cstdlib>
-#include <queue>
 #include <cstring>
-#include <errno.h>
 #include <sys/stat.h>
-
-#include <iostream>
-
-#include <CoreServices/Components.k.h>
 
 namespace mozilla {
 
@@ -32,26 +25,21 @@ namespace moz_filewatcher {
 
 
 
-
-
-
+// Intializing static class members
 CallBackEvents* NativeFileWatcherFSETask::cbe_internal;
+CallBackEvents NativeFileWatcherIOTask::mCallBackEvents;
 
 NativeFileWatcherFSETask::NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent,
                                                             CallBackEvents* cbe,
                                                             std::vector<CFStringRef>& dirs)
     : Runnable("NativeFileWatcherFSETask")
     , mParent(parent)
-    , runLoopLock("run loop lock")
 {
-    // move this to CPP file and set up stream here
     for(int i(0); i < dirs.size(); i++) {
         mDirs.push_back(dirs[i]);
     }
 
     cbe_internal = cbe;
-
-    runLoopLock.Lock();
 
     //Making stream context for stream creation.
     auto *context = new FSEventStreamContext();
@@ -67,7 +55,6 @@ NativeFileWatcherFSETask::NativeFileWatcherFSETask(NativeFileWatcherIOTask* pare
     // Setting flags for stream creation.
     FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
 
-    // Create the actual FS Event Stream.
     mEventStreamRef = FSEventStreamCreate(nullptr,
                                           &NativeFileWatcherFSETask::fsevents_callback,
                                           context,
@@ -80,8 +67,8 @@ NativeFileWatcherFSETask::NativeFileWatcherFSETask(NativeFileWatcherIOTask* pare
 NS_IMETHODIMP
 NativeFileWatcherFSETask::RemovePath(char* pathToRemove)
 {
-    runLoopLock.Lock();
-
+    // Get the current stream paths if there none available, after removing the path, then shutdown the stream.
+    // And don't reschdule the run loop.
     std::vector<CFStringRef> newPaths = GetCurrentStreamPaths(pathToRemove);
     if(newPaths.empty())
     {
@@ -89,11 +76,10 @@ NativeFileWatcherFSETask::RemovePath(char* pathToRemove)
        FSEventStreamInvalidate(mEventStreamRef);
        FSEventStreamRelease(mEventStreamRef);
 
-       runLoopLock.Unlock();
-
        return NS_OK;
     }
 
+    // Otherwise re-create the stream without the pathToRemove.
     CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
                                             reinterpret_cast<const void**> (&newPaths[0]),
                                             newPaths.size(),
@@ -106,7 +92,6 @@ NativeFileWatcherFSETask::RemovePath(char* pathToRemove)
     FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
     auto *context = new FSEventStreamContext();
 
-    // Create the actual FS Event Stream.
     mEventStreamRef = FSEventStreamCreate(nullptr,
                                           &NativeFileWatcherFSETask::fsevents_callback,
                                           context,
@@ -115,14 +100,14 @@ NativeFileWatcherFSETask::RemovePath(char* pathToRemove)
                                           (CFAbsoluteTime)3.0,
                                           streamFlags);
 
+    // Reschedule the run loop.
     return NS_DispatchToCurrentThread(this);
 }
 
 NS_IMETHODIMP
 NativeFileWatcherFSETask::AddPath(char* pathToAdd)
 {
-    runLoopLock.Lock();
-
+    // Get the current paths being watched and add pathToAdd.
     std::vector<CFStringRef> newPaths = GetCurrentStreamPaths();
     newPaths.push_back(CFStringCreateWithCString(nullptr, pathToAdd, kCFStringEncodingASCII));
     CFArrayRef PathsToWatch = CFArrayCreate(nullptr,
@@ -137,7 +122,6 @@ NativeFileWatcherFSETask::AddPath(char* pathToAdd)
     FSEventStreamCreateFlags streamFlags = kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer;
     auto *context = new FSEventStreamContext();
 
-    // Create the actual FS Event Stream.
     mEventStreamRef = FSEventStreamCreate(nullptr,
                                           &NativeFileWatcherFSETask::fsevents_callback,
                                           context,
@@ -146,6 +130,7 @@ NativeFileWatcherFSETask::AddPath(char* pathToAdd)
                                           (CFAbsoluteTime)3.0,
                                           streamFlags);
 
+    // Reschedule the run loop.
     return NS_DispatchToCurrentThread(this);
 }
 
@@ -155,17 +140,11 @@ NativeFileWatcherFSETask::GetCurrentStreamPaths(char* skip)
     std::vector<CFStringRef> toReturn;
     CFArrayRef TempPath = FSEventStreamCopyPathsBeingWatched(mEventStreamRef);
     for(int i = 0 ; i < CFArrayGetCount(TempPath); ++i){
-
-        std::cout << "We're comparing: \n"
-                  << CFStringGetCStringPtr(CFStringCreateWithCString(nullptr, skip, kCFStringEncodingASCII), kCFStringEncodingASCII)
-                  << "\nwith:\n"
-                  << CFStringGetCStringPtr((CFStringRef)CFArrayGetValueAtIndex(TempPath,i), kCFStringEncodingASCII) << std::endl;
-
+        // Add each path currenty being watched to the list of paths which will be watched, unless it matches skip.
+        // This is done because of the immutability of the stream.
         if(!CFEqual(CFStringCreateWithCString(nullptr, skip, kCFStringEncodingASCII), CFArrayGetValueAtIndex(TempPath,i)))
         {
-            //continue;
             toReturn.push_back((CFStringRef)CFArrayGetValueAtIndex(TempPath,i));
-            std::cout << "Adding " << toReturn.back() << " to toReturn.\n";
         }
     }
     return toReturn;
@@ -184,8 +163,8 @@ NativeFileWatcherFSETask::Run()
     FSEventStreamScheduleWithRunLoop(mEventStreamRef,mRunLoop,kCFRunLoopDefaultMode);
     FSEventStreamStart(mEventStreamRef);
 
-    runLoopLock.Unlock();
-
+    // This is a blocking call and won't return until CFRunLoopStop
+    // is called on the run loop reference by the parent class.
     CFRunLoopRun();
 
     return NS_OK;
@@ -198,18 +177,18 @@ void NativeFileWatcherFSETask::fsevents_callback(ConstFSEventStreamRef streamRef
                                            const FSEventStreamEventFlags eventFlags[],
                                            const FSEventStreamEventId eventIds[])
 {
+    // Locking the CallBackEvent struct because of shared processing in NativeFileWatcherIOTask runInternal.
     cbe_internal->callBackLock.Lock();
 
-    std::cout << "We have " << numEvents << " events.\n";
-
-    // Build the notification objects
+    // Save all currently reported events by the stream for later processing.
     for (size_t i = 0; i < numEvents; ++i)
     {
-        std::cout << "\n\nWhat we're working with:\n" << "eventFlags[" << i << "]: "
-                  << eventFlags[i] << "\neventPaths[" << i << "]: " << ((char**)(eventPaths))[i] << "\n\n";
-
-        std::cout << "<<<<<<<<<<<<<>>>>>>>>>>>>>>EventID in handler for event [" << i << "]: " << eventIds[i] << std::endl;
-
+        // Currently there are two events getting reported for one creation event.
+        // This is problematic because there isn't an effective correlation between
+        // reported events and users deired callbacks; therefore, multiple user callbacks are triggered
+        // per single creation event.
+        //
+        // This means that the filewatcher will not report directory creation and deletion events.
         if(eventFlags[i] & kFSEventStreamEventFlagItemIsFile) {
             char* singlePath = ((char**) eventPaths)[i];
             CallBackAction callBackAction(singlePath, eventFlags[i], eventIds[i]);
@@ -221,10 +200,9 @@ void NativeFileWatcherFSETask::fsevents_callback(ConstFSEventStreamRef streamRef
 }
 
 
-CallBackEvents NativeFileWatcherIOTask::mCallBackEvents;
-
 void
 NativeFileWatcherIOTask::SetRef(CFRunLoopRef toSet) {
+    // Sets child run loop to the passed in reference, when called by the child.
     childRunLoop = toSet;
 }
 
@@ -237,25 +215,34 @@ NativeFileWatcherIOTask::SetRef(CFRunLoopRef toSet) {
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-    sleep(0.01);
+    sleep(0.01);// FIXME See if effects CPU usage
+
+    // Locking the shared structure that is populated in the FSETask stream call back.
     mCallBackEvents.callBackLock.Lock();
 
-    //If there are no callBack events to handle we release the lock and return.
+    // If there are no callBack events to handle we release the lock and return.
     if (mCallBackEvents.mSavedEvents.empty()){
         mCallBackEvents.callBackLock.Unlock();
         return NS_OK;
     }
 
+    // Otherwise process saved events and trigger user supplied call backs.
     for(int i = 0; i < mCallBackEvents.mSavedEvents.size(); i++) {
         CallBackAction eventToHandle = mCallBackEvents.mSavedEvents.front();
-        char testBuffer[2048];
-        snprintf(testBuffer, 2048, "%s", eventToHandle.mEventPath);
+
+        char testBuffer[PATH_MAX]; // FIXME TONIGHT test revert this.
+        snprintf(testBuffer, PATH_MAX, "%s", eventToHandle.mEventPath);
+
+        // Get list of recursive paths to check against the callback hashtable,
+        // to ensure that nested directory watch call backs are triggered.
         std::vector<std::string> returnedPaths = getRecursivePaths(eventToHandle.mEventPath);
-        std::cout << "Returned Paths, length is: " << returnedPaths.size() << std::endl;
+
         for(std::string path : returnedPaths) {
             nsString resourcePath = NS_ConvertASCIItoUTF16(path.c_str());
             WatchedResourceDescriptor* changedRes = mWatchedResourcesByPath.Get(resourcePath);
 
+            // If there is a matching list of callbacks in the hashtable for this directory
+            // then trigger those callbacks.
             if (changedRes){
                 nsString changedPath = NS_ConvertASCIItoUTF16(testBuffer);
                 nsresult rv = DispatchChangeCallbacks(changedRes, changedPath);
@@ -267,6 +254,8 @@ NativeFileWatcherIOTask::RunInternal()
                 }
             }
         }
+
+        // Clear the temporary list of recursive directories and pop the handled event from the queue.
         returnedPaths.clear();
         mCallBackEvents.mSavedEvents.pop();
     }
@@ -275,6 +264,8 @@ NativeFileWatcherIOTask::RunInternal()
 
     return NS_OK;
 }
+
+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 /**
  * Wraps the watcher logic and takes care of rescheduling
@@ -306,9 +297,9 @@ NativeFileWatcherIOTask::Run()
         return NS_OK;
     }
 
-    // No error occurred, reschedule. // FIXME: this is fucked? Maybe not.
-    return NS_DispatchToCurrentThread(this); // This caused the double call, and MOZ_CRASh.
-                                             // *** SO WE'RE RE-SCHEDULING AS PART OF NORMAL OPERATION. <<<<<
+    // No error occurred, reschedule.
+    return NS_DispatchToCurrentThread(this);
+
 }
 
 std::vector<std::string> NativeFileWatcherIOTask::getRecursivePaths(char* initialPath) {
@@ -377,12 +368,10 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
     // Convert path to watch to a c-string.
     char* localPath = ToNewCString(wrappedParameters->mPath);
 
-    std::cout << "**** IN FILEWATCHER ***** Path passed in: " << localPath << std::endl;
 
     // Does the path exist? Notify and exit if not.
     struct stat buffer;
     if(stat(localPath, &buffer)) {
-        std::cout << "Fatal error checking path: " << std::strerror(errno) << std::endl;
         FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - File does not exist.");
 
         return NS_ERROR_FILE_NOT_FOUND;
@@ -405,28 +394,6 @@ NativeFileWatcherIOTask::AddPathRunnableMethod(
 
     // Add the single watch directory that was passed into this method.
     dirs.push_back(CFStringCreateWithCString(nullptr, localPath, kCFStringEncodingASCII));
-
-
-
-
-
-
-//    // Check that adding the path to the inotify instance was sucessfull. Report error if not.
-//    if (!mEventStreamRef) {
-//        FILEWATCHERLOG("NativeFileWatcherIOTask::AddPathRunnableMethod - Fail to add watch");
-
-//        nsresult rv =
-//          ReportError(wrappedParameters->mErrorCallbackHandle, NS_ERROR_UNEXPECTED, (long)(mEventStreamRef));
-//        if (NS_FAILED(rv)) {
-//          FILEWATCHERLOG(
-//            "NativeFileWatcherIOTask::AddPathRunnableMethod - "
-//            "Failed to dispatch the error callback (%x).",
-//            rv);
-//          return rv;
-//        }
-
-//        return NS_ERROR_FAILURE;
-//    }
 
     // If the run loop thread has not been created yet (which calls CFRunLoopRun()), then
     if(!mWorkerFSERunnable) {
@@ -1033,13 +1000,6 @@ NativeFileWatcherService::NativeFileWatcherService() {}
 
 NativeFileWatcherService::~NativeFileWatcherService() {}
 
-void
-NativeFileWatcherService::signalHandler(int signal) // FIXME: DELETE THIS
-{
-//    if(signal == SIGIO) {
-//        ++mEventWaiting;
-//    }
-}
 
 /**
  * Sets the required resources and starts the watching IO thread.
@@ -1140,8 +1100,6 @@ NativeFileWatcherService::AddPath(
     // Since the dispatch succeeded, we let the runnable own the pointer.
     Unused << wrappedCallbacks.release();
 
-    WakeUpWorkerThread();
-
     return NS_OK;
 }
 
@@ -1216,8 +1174,6 @@ NativeFileWatcherService::RemovePath(
     // Since the dispatch succeeded, we let the runnable own the pointer.
     Unused << wrappedCallbacks.release();
 
-    WakeUpWorkerThread();
-
     return NS_OK;
 }
 
@@ -1265,23 +1221,8 @@ NativeFileWatcherService::Uninit()
     return NS_OK;
 }
 
-/**
- * Tells |NativeFileWatcherIOTask| to quit and to reschedule itself in order to
- * execute the other runnables enqueued in the worker tread.
- * This works by posting a bogus event to the blocking
- * |GetQueuedCompletionStatus| call in |NativeFileWatcherIOTask::Run()|.
- */
-void
-NativeFileWatcherService::WakeUpWorkerThread()
-{
-    // The last 3 parameters represent the number of transferred bytes, the
-    // changed resource |HANDLE| and the address of the |OVERLAPPED| structure
-    // passed to GetQueuedCompletionStatus: we set them to nullptr so that we can
-    // recognize that we requested an interruption from the Worker thread.
-    // PostQueuedCompletionStatus(mIOCompletionPort, 0, 0, nullptr);
-}
 
-/**er
+/**
  * This method is used to catch the "xpcom-shutdown-threads" event in order
  * to shutdown this service when closing the application.
  */
@@ -1304,3 +1245,4 @@ NativeFileWatcherService::Observe(nsISupports* aSubject,
 }
 
 }
+

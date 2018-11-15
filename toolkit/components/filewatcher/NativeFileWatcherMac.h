@@ -1,27 +1,28 @@
 #ifndef mozilla_nativefilewatcher_h__
 #define mozilla_nativefilewatcher_h__
 
-#include "nsINativeFileWatcher.h"
 #include "NativeFileWatcherCommons.h"
-#include "nsIObserver.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
+#include "nsINativeFileWatcher.h"
+#include "nsIObserver.h"
 #include "nsThreadUtils.h"
-#include <CoreServices/CoreServices.h>
+#include <mozilla/Mutex.h>
+
 #include <CoreServices/Components.k.h>
+#include <CoreServices/CoreServices.h>
+
 #include <queue>
 #include <vector>
-#include <mozilla/Mutex.h>
+#include <sys/syslimits.h>
 
 
 namespace mozilla {
 
 namespace moz_filewatcher{
 
-
-
 /**
- * A structure to hold the information about a single inotify watch descriptor.
+ * A structure to hold the information about a single watched resource.
  */
 struct WatchedResourceDescriptor
 {
@@ -33,52 +34,76 @@ struct WatchedResourceDescriptor
     }
 };
 
+/**
+ * The CallBackAction struct is a specific event that occurs in the filesystem as reported by FSEvents.
+ */
 struct CallBackAction{
     CallBackAction(char*eventPath, const FSEventStreamEventFlags eventFlag, const FSEventStreamEventId eventIds)
         : mEventFlags(eventFlag)
         , mEventIds(eventIds)
     {
-        snprintf(mEventPath, 2048, "%s", eventPath);
+        snprintf(mEventPath, PATH_MAX, "%s", eventPath);
     }
 
-    char mEventPath[2048]; // FIXME: find max path length
+    char mEventPath[PATH_MAX];
     const FSEventStreamEventFlags mEventFlags;
     const FSEventStreamEventId mEventIds;
 };
 
+
+/**
+ * The CallBackEvents struct manages the FSEvents events returned to the stream.
+ *
+ * This is populated inside of the FSEvents callback. It is then processed on a separate
+ * thread by NativeFileWatcherIOTask::RunInternal() which parses the events and calls the
+ * appropriate callbacks.
+ */
 struct CallBackEvents{
     CallBackEvents()
         : callBackLock("filewatcher::eventLock")
     {}
-    std::queue<CallBackAction> mSavedEvents;
-    Mutex callBackLock;
+    std::queue<CallBackAction> mSavedEvents; // Used to hold individual FSEvents
+    Mutex callBackLock; // Used for safe access across multiple threads.
 };
 
-class NativeFileWatcherIOTask;
+class NativeFileWatcherIOTask; // Forward Declaration of class.
 
+
+/**
+ * The NativeFileWatcherFSETask class which holds all of the functionality of the FSEventStream.
+ *
+ * It inherits from Runnable as we need to make a blocking call to CFRunLoopRun(). CFRunLoopRun() allows the
+ * stream to report file system events. The event stream is an immutable object, therefore with every change in the
+ * paths watched, the stream must be stopped and a new stream must be created with a new list of paths to be watched.
+ */
 class NativeFileWatcherFSETask : public Runnable
 {
 public:
     explicit NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent, CallBackEvents* cbe, std::vector<CFStringRef>& dirs);
 
-    // This should only create the stream and call RunLoopRun, then stop the stream
+    // This is a blocking method which runs the steam on a CFRunLoop.
     NS_IMETHOD Run() override;
 
-    // Adds path to the stream (restarts it)
+    // Adds path to the stream (and restarts it)
     NS_IMETHOD AddPath(char* pathToAdd);
 
-    // This should get current paths from the stream and reset mDirs to all but pathToRemove
+    // Removes path from the stream and restarts it. Unless it removes the last path being watched by the stream.
+    // In this instance, we will return from this runnable without starting a new stream.
     NS_IMETHOD RemovePath(char* pathToRemove);
 
 private:
-    mozilla::Mutex runLoopLock;
+    //mozilla::Mutex runLoopLock;
 
-    FSEventStreamRef mEventStreamRef;
-    CFRunLoopRef mRunLoop = nullptr;
-    std::vector<CFStringRef> mDirs;
-    static CallBackEvents* cbe_internal;
-    NativeFileWatcherIOTask* mParent;
+    FSEventStreamRef mEventStreamRef; // Reference to the FSEventStream
+    CFRunLoopRef mRunLoop = nullptr; // Reference to the RunLoop which is passed back to the parent class, to stop the RunLoop
+    std::vector<CFStringRef> mDirs; // A mutable list of directories which we build dynamically based on the needs of the stream
+    static CallBackEvents* cbe_internal; // Pointer to a callback events struct which is allocated in the parent class and used
+                                         // to hold events read from the stream for processing back in the parent class.
+    NativeFileWatcherIOTask* mParent; // Pointer to the parent class to allow stopping the CFRunLoop from another thread.
+                                      // Please see the variable mRunLoop.
 
+    // Callback which handles events from the stream and is automatically called from the running stream
+    // which we have set up to monitor the user defined paths.
     static void fsevents_callback(ConstFSEventStreamRef streamRef,
                                                void *clientCallBackInfo,
                                                size_t numEvents,
@@ -86,18 +111,14 @@ private:
                                                const FSEventStreamEventFlags eventFlags[],
                                                const FSEventStreamEventId eventIds[]);
 
+    // Utility function which gets all currently watched paths from the stream except for skip, if supplied.
     std::vector<CFStringRef> GetCurrentStreamPaths(char* skip = "");
 };
 
+
 /**
- * This runnable is dispatched from the main thread to get the notifications of
- * the changes in the watched resources by handling and acting on signals from
- * the kernel.
- *
- * This is accomplished with non-blocking reads from an inotify file descriptor
- * when the signal handler tied to the inotify file descriptor increments an
- * event counter. Callbacks are then dispatched depending on the type of event
- * the inotify_event read from the file descriptor describes.
+ * This runnable is dispatched from the main thread to process the events saved
+ * into the CallBackEvent structure populated in the stream callback.
  */
 class NativeFileWatcherIOTask : public Runnable
 {
@@ -119,13 +140,7 @@ public:
 
 
 private:
-    // Maintain 2 indexes - one by resource path, one by inotify watch descriptor.
-    // Since our watch descriptor is an int, we use nsUint32HashKey to compute the
-    // hashing key. We need 2 indexes in order to quickly look up the
-    // changed resource in the Worker Thread.
-    // The objects are not ref counted and get destroyed by
-    // mWatchedResourcesByPath on NativeFileWatcherService::Destroy or in
-    // NativeFileWatcherService::RemovePath.
+    // Maintain an index of watch descriptors by resource path.
     nsClassHashtable<nsStringHashKey, WatchedResourceDescriptor>
     mWatchedResourcesByPath;
 
@@ -143,17 +158,23 @@ private:
     // Other methods need to know that a shutdown is in progress.
     bool mShuttingDown;
 
-    // Main inotify file descriptor (initialized in NativeFileWatcher's Init())
-    int mInotifyFileDescriptor;
-
+    // Structure which is populated inside of the stream FSEventStream callback and used to
+    // call the correct user supplied change callbacks.
     static CallBackEvents mCallBackEvents;
+
+    // Automatically set from the child FSETask and holds the current reference to the
+    // FSEvent's RunLoop.
     CFRunLoopRef childRunLoop;
 
-    // Here is the queue for the events read from inotify file descriptor
-    //std::queue<inotify_event*> mInotifyEventQueue;
-
+    // Locks the mCallBackEvent structure, pulls events which were added in the stream
+    // callback of FSETask and calls the corresponding user supplied callbacks for that
+    // watched resource.
     nsresult RunInternal();
 
+    // Breaks down the initialPath agrument into recursively shortened paths down to the
+    // root. This is required because there isn't a direct correlation between a returned
+    // FSEvent and the initial watched resource. All paths returned from this are checked
+    // against the callback hashtable. All callbacks will be executed for matching entries in the hashtable.
     std::vector<std::string> getRecursivePaths(char* initialPath);
 
     nsresult DispatchChangeCallbacks(
@@ -197,7 +218,9 @@ private:
 };
 
 
-}
+} // End moz_filewatcher namespace
+
+
 class NativeFileWatcherService final
   : public nsINativeFileWatcherService
   , public nsIObserver
@@ -213,15 +236,12 @@ public:
   nsresult Init();
 
 private:
-  // Filewatcher IO thread for back-end inotify work.
+  // Filewatcher IO thread for back-end FSEvent's work.
   nsCOMPtr<nsIThread> mIOThread;
   // The instance of the runnable dealing with the I/O.
   nsCOMPtr<nsIRunnable> mWorkerIORunnable;
 
-  static void signalHandler(int signal);
-
   nsresult Uninit();
-  void WakeUpWorkerThread();
 
   // Make the dtor private to make this object only deleted via its ::Release()
   // method.
