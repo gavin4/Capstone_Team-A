@@ -1,21 +1,24 @@
 #ifndef mozilla_nativefilewatcher_h__
 #define mozilla_nativefilewatcher_h__
 
+#include "nsINativeFileWatcher.h"
+#include "NativeFileWatcherCommons.h"
 #include "nsIObserver.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsThreadUtils.h"
-
-#include "NativeFileWatcherCommons.h"
-
 #include <CoreServices/CoreServices.h>
 #include <CoreServices/Components.k.h>
+#include <queue>
+#include <vector>
+#include <mozilla/Mutex.h>
+
 
 namespace mozilla {
 
-namespace moz_filewatcher {
+namespace moz_filewatcher{
 
-class NativeFileWatcherIOTask;
+
 
 /**
  * A structure to hold the information about a single inotify watch descriptor.
@@ -51,23 +54,25 @@ struct CallBackEvents{
     Mutex callBackLock;
 };
 
+class NativeFileWatcherIOTask;
+
 class NativeFileWatcherFSETask : public Runnable
 {
 public:
-    explicit NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent, CallBackEvents* cbe, std::vector<CFStringRef>& dirs)
-        : Runnable("NativeFileWatcherFSETask")
-        , mParent(parent)
-    {
-        for(int i(0); i < dirs.size(); i++) {
-            mDirs.push_back(dirs[i]);
-        }
+    explicit NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent, CallBackEvents* cbe, std::vector<CFStringRef>& dirs);
 
-        cbe_internal = cbe;
-    }
-
+    // This should only create the stream and call RunLoopRun, then stop the stream
     NS_IMETHOD Run() override;
 
+    // Adds path to the stream (restarts it)
+    NS_IMETHOD AddPath(char* pathToAdd);
+
+    // This should get current paths from the stream and reset mDirs to all but pathToRemove
+    NS_IMETHOD RemovePath(char* pathToRemove);
+
 private:
+    mozilla::Mutex runLoopLock;
+
     FSEventStreamRef mEventStreamRef;
     CFRunLoopRef mRunLoop = nullptr;
     std::vector<CFStringRef> mDirs;
@@ -80,6 +85,8 @@ private:
                                                void *eventPaths,
                                                const FSEventStreamEventFlags eventFlags[],
                                                const FSEventStreamEventId eventIds[]);
+
+    std::vector<CFStringRef> GetCurrentStreamPaths(char* skip = "");
 };
 
 /**
@@ -191,7 +198,6 @@ private:
 
 
 }
-
 class NativeFileWatcherService final
   : public nsINativeFileWatcherService
   , public nsIObserver
