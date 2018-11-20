@@ -12,7 +12,6 @@
 #include "mozilla/Scoped.h"
 
 #include <sys/inotify.h>
-//#include <unistd.h> 
 #include <time.h>
 #include <fcntl.h>
 #include <csignal>
@@ -153,9 +152,6 @@ NativeFileWatcherIOTask::RunInternal()
 
     // nanosleep to keep thread in suspended state until event occurs, and to keep thread from using CPU.
     // Will return early as soon as an event occurs (our signal handler is triggered).
-    /* TODO: (remove this comment line). nanosleep appears to replace usleep funtion
-        More details found here: https://linux.die.net/man/2/nanosleep
-    */
     nanosleep(10000000);
 
     // If we've slept for 0.01 seconds (or we returned early due to a file system event), we should check
