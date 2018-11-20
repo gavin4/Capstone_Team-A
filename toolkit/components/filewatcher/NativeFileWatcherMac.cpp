@@ -13,7 +13,7 @@
 #include "nsProxyRelease.h"
 #include "nsTArray.h"
 
-#include <unistd.h>
+#include <time.h>
 #include <fcntl.h>
 #include <cstdlib>
 #include <cstring>
@@ -215,7 +215,7 @@ NativeFileWatcherIOTask::SetRef(CFRunLoopRef toSet) {
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-    sleep(0.01);// FIXME See if effects CPU usage
+    nanosleep(10000000); // FIXME See if effects CPU usage
 
     // Locking the shared structure that is populated in the FSETask stream call back.
     mCallBackEvents.callBackLock.Lock();
@@ -231,7 +231,6 @@ NativeFileWatcherIOTask::RunInternal()
         CallBackAction eventToHandle = mCallBackEvents.mSavedEvents.front();
 
         char testBuffer[PATH_MAX]; // FIXME TONIGHT test revert this.
-        snprintf(testBuffer, PATH_MAX, "%s", eventToHandle.mEventPath);
 
         // Get list of recursive paths to check against the callback hashtable,
         // to ensure that nested directory watch call backs are triggered.

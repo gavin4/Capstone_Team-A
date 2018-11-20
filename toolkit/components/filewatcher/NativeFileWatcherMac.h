@@ -42,7 +42,7 @@ struct CallBackAction{
         : mEventFlags(eventFlag)
         , mEventIds(eventIds)
     {
-        snprintf(mEventPath, PATH_MAX, "%s", eventPath);
+
     }
 
     char mEventPath[PATH_MAX];
