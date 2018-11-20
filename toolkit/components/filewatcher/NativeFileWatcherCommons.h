@@ -33,7 +33,6 @@ static mozilla::LazyLogModule gNativeWatcherPRLog("NativeFileWatcherService");
     MOZ_LOG(gNativeWatcherPRLog, mozilla::LogLevel::Debug, (__VA_ARGS__))
 
 
-// Filewatcher specific namespace (replaces old anonymous namespaces).
 namespace moz_filewatcher {
 
 /**
