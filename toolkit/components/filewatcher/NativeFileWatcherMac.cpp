@@ -221,7 +221,7 @@ NativeFileWatcherIOTask::RunInternal()
     mCallBackEvents.callBackLock.Lock();
 
     // If there are no callBack events to handle we release the lock and return.
-    if (mCallBackEvents.mSavedEvents.empty()){
+    if (mCallBackEvents.mSavedEvents.empty()) {
         mCallBackEvents.callBackLock.Unlock();
         return NS_OK;
     }
@@ -243,7 +243,7 @@ NativeFileWatcherIOTask::RunInternal()
 
             // If there is a matching list of callbacks in the hashtable for this directory
             // then trigger those callbacks.
-            if (changedRes){
+            if (changedRes) {
                 nsString changedPath = NS_ConvertASCIItoUTF16(testBuffer);
                 nsresult rv = DispatchChangeCallbacks(changedRes, changedPath);
                 if (NS_FAILED(rv)) {
