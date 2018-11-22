@@ -102,7 +102,9 @@ private:
    	// and so on using functions that begin with FSEventStream
     FSEventStreamRef mEventStreamRef;
     CFRunLoopRef mRunLoop = nullptr;  // Reference to the RunLoop which is passed back to the parent class, to stop the RunLoop
-    std::vector<CFStringRef> mDirs;   // A mutable list of directories which we build dynamically based on the needs of the stream
+    std::vector<CFStringRef> mDirs;   // A mutable list of directories which we build dynamically. Because our stream is immutable, 
+									  // we are restarting the stream with the new list of paths/directories to watch, contained in 
+									  // this vector, every time we need to add and remove a path.
     static CallBackEvents* cbe_internal; // Pointer to a shared callback events struct which is allocated in the NativeFileWatcherIOTask 
 										 // (owner) class and used to hold events read from the stream for processing back in the owner 
 										 // class. Static as we need to access this from the static callback handler in the event stream.
