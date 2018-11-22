@@ -85,10 +85,11 @@ class NativeFileWatcherFSETask : public Runnable
 public:
     explicit NativeFileWatcherFSETask(NativeFileWatcherIOTask* parent, CallBackEvents* cbe, std::vector<CFStringRef>& dirs);
 
-    // This is a blocking method which runs the steam on a CFRunLoop.
+    // This is a blocking method which runs the steam on a CFRunLoop. It returns from the blocking call when the
+	// owner stops the run loop.
     NS_IMETHOD Run() override;
 
-    // Adds path to the stream (and restarts it)
+    // Adds a file or directory path to the stream. Because our stream is immutable, we are restarting the stream with the new configuration.
     NS_IMETHOD AddPath(char* pathToAdd);
 
     // Removes path from the stream and restarts it. Unless it removes the last path being watched by the stream.
