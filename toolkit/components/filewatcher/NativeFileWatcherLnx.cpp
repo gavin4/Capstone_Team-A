@@ -69,11 +69,20 @@ public:
     {
     }
 
+	// Called automatically upon scheduling of the Runnable.
     NS_IMETHOD Run() override;
-    nsresult AddPathRunnableMethod(
-            PathRunnablesParametersWrapper* aWrappedParameters);
-    nsresult RemovePathRunnableMethod(
-            PathRunnablesParametersWrapper* aWrappedParameters);
+	
+	// Called upon dispatch from the main thread to this worker thread when adding a 
+	// path to the watch list. Will update the inotify watch descriptor to watch the 
+	// new path/file, and update the callback system to respond correctly.
+    nsresult AddPathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
+	
+	// Called upon dispatch from the main thread to this worker thread when removing a 
+	// path to the watch list. Will update the inotify watch descriptor and callbacks
+	// to no longer respond to changes at this path/file.
+    nsresult RemovePathRunnableMethod(PathRunnablesParametersWrapper* aWrappedParameters);
+	
+	// Called on shutdown to clear all allocated resources in the watcher.
     nsresult DeactivateRunnableMethod();
 
 private:
@@ -149,7 +158,11 @@ private:
 nsresult
 NativeFileWatcherIOTask::RunInternal()
 {
-    int mInotifyReadTimeout;
+    int mInotifyReadTimeout; // Safety timeout in case of non-exiting loop.
+	
+	// Buffer to hold a single instance of an inotify event, read directly from the file descriptor 
+	// with read(). This is then used to to populate a more permanent inotify_event object before 
+	// reading again from the file descriptor into this memory region.
     char inotifyEventTempBuffer[(sizeof(struct inotify_event) + NAME_MAX + 1)] __attribute__ ((aligned(8)));
 
     // Sleep to keep thread in suspended state until event occurs, and to keep thread from using CPU.
