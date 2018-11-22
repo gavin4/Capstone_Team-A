@@ -75,6 +75,10 @@ class NativeFileWatcherIOTask; // Forward Declaration of class.
  * It inherits from Runnable as we need to make a blocking call to CFRunLoopRun(). CFRunLoopRun() allows the
  * stream to report file system events. The event stream is an immutable object, therefore with every change in the
  * paths watched, the stream must be stopped and a new stream must be created with a new list of paths to be watched.
+ * 
+ * This class runs on a separate worker thread, mFSEThread, that is scheduled by mIOThread. This is because of the
+ * blocking loop above. When the loop exits and the stream must be restarted (in the case of adding paths or removing
+ * the non-last path) this task may also be rescheduled by itself through NS_DispatchToCurrentThread(this);
  */
 class NativeFileWatcherFSETask : public Runnable
 {
@@ -92,18 +96,18 @@ public:
     NS_IMETHOD RemovePath(char* pathToRemove);
 
 private:
-    //mozilla::Mutex runLoopLock;
-
     FSEventStreamRef mEventStreamRef; // Reference to the FSEventStream
-    CFRunLoopRef mRunLoop = nullptr; // Reference to the RunLoop which is passed back to the parent class, to stop the RunLoop
-    std::vector<CFStringRef> mDirs; // A mutable list of directories which we build dynamically based on the needs of the stream
-    static CallBackEvents* cbe_internal; // Pointer to a callback events struct which is allocated in the parent class and used
-                                         // to hold events read from the stream for processing back in the parent class.
-    NativeFileWatcherIOTask* mParent; // Pointer to the parent class to allow stopping the CFRunLoop from another thread.
-                                      // Please see the variable mRunLoop.
+    CFRunLoopRef mRunLoop = nullptr;  // Reference to the RunLoop which is passed back to the parent class, to stop the RunLoop
+    std::vector<CFStringRef> mDirs;   // A mutable list of directories which we build dynamically based on the needs of the stream
+    static CallBackEvents* cbe_internal; // Pointer to a shared callback events struct which is allocated in the NativeFileWatcherIOTask 
+										 // (owner) class and used to hold events read from the stream for processing back in the owner 
+										 // class. Static as we need to access this from the static callback handler in the event stream.
+    NativeFileWatcherIOTask* mParent; // Pointer to the owner class to allow stopping the CFRunLoop from another thread.
+                                      // Please see the variable mRunLoop documentation for more information.
 
     // Callback which handles events from the stream and is automatically called from the running stream
-    // which we have set up to monitor the user defined paths.
+    // which we have set up to monitor the user defined paths. Static as we need a function pointer to pass
+	// to the stream on creation for the callback handler, and this is a member function.
     static void fsevents_callback(ConstFSEventStreamRef streamRef,
                                                void *clientCallBackInfo,
                                                size_t numEvents,
