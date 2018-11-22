@@ -19,14 +19,14 @@
 
 namespace mozilla {
 
-namespace moz_filewatcher{
+namespace moz_filewatcher {
 
 /**
- * A structure to hold the information about a single watched resource.
+ * A structure to hold the information about a single watched resource (file or directory).
  */
 struct WatchedResourceDescriptor
 {
-    // The path on the file system of the watched resource.
+    // The path on the file system of the watched resource (file or directory).
     nsString mPath;
     WatchedResourceDescriptor(const nsAString& aPath)
         : mPath(aPath)
@@ -37,8 +37,8 @@ struct WatchedResourceDescriptor
 /**
  * The CallBackAction struct is a specific event that occurs in the filesystem as reported by FSEvents.
  */
-struct CallBackAction{
-    CallBackAction(char*eventPath, const FSEventStreamEventFlags eventFlag, const FSEventStreamEventId eventIds)
+struct CallBackAction {
+    CallBackAction(char* eventPath, const FSEventStreamEventFlags eventFlag, const FSEventStreamEventId eventIds)
         : mEventFlags(eventFlag)
         , mEventIds(eventIds)
     {
@@ -58,12 +58,14 @@ struct CallBackAction{
  * thread by NativeFileWatcherIOTask::RunInternal() which parses the events and calls the
  * appropriate callbacks.
  */
-struct CallBackEvents{
+struct CallBackEvents {
     CallBackEvents()
         : callBackLock("filewatcher::eventLock")
     {}
+    // mSavedEvents holds a queue of CallBackActions to process to ensure that no action is missed
+    // while processing another action.
     std::queue<CallBackAction> mSavedEvents; // Used to hold individual FSEvents
-    Mutex callBackLock; // Used for safe access across multiple threads.
+    Mutex callBackLock; // Used for safe access to mSavedEvents across multiple threads.
 };
 
 class NativeFileWatcherIOTask; // Forward Declaration of class.
